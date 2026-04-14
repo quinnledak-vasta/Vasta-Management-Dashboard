@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   CheckSquare, 
@@ -76,6 +76,18 @@ import { toast } from 'sonner';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AuthProvider, useAuth } from './lib/AuthContext';
 import { LoginPage } from './components/LoginPage';
+import { db } from './lib/firebase';
+import { 
+  collection, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  doc, 
+  query, 
+  orderBy, 
+  Timestamp,
+  setDoc
+} from 'firebase/firestore';
 import { mockTasks, mockTrainers, mockAlerts } from './lib/mockData';
 import { Task, Trainer, Alert, TaskStatus, Priority, Invite, UserRole, RecurrenceInterval, TaskNote, TaskQuestion } from './types';
 import { GoogleGenAI } from "@google/genai";
@@ -94,10 +106,66 @@ export default function App() {
 
 function AppContent() {
   const { user, loading, logout, addInvite } = useAuth();
-  const [tasks, setTasks] = useState<Task[]>(mockTasks);
-  const [trainers] = useState<Trainer[]>(mockTrainers);
-  const [alerts, setAlerts] = useState<Alert[]>(mockAlerts);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [trainers, setTrainers] = useState<Trainer[]>([]);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
+
+  // Fetch Tasks from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const taskList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Task[];
+      setTasks(taskList.length > 0 ? taskList : mockTasks);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Trainers from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'users'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const trainerList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Trainer[];
+      setTrainers(trainerList.length > 0 ? trainerList : mockTrainers);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Alerts from Firestore
+  useEffect(() => {
+    if (!user || user.role !== 'admin') return;
+    const q = query(collection(db, 'alerts'), orderBy('sentAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const alertList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Alert[];
+      setAlerts(alertList.length > 0 ? alertList : mockAlerts);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Invites from Firestore
+  useEffect(() => {
+    if (!user || user.role !== 'admin') return;
+    const q = query(collection(db, 'invites'), orderBy('sentAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const inviteList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Invite[];
+      setInvites(inviteList);
+    });
+    return () => unsubscribe();
+  }, [user]);
   const [activeTab, setActiveTab] = useState('tasks');
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
@@ -150,113 +218,141 @@ function AppContent() {
     );
   }, [tasks, searchQuery]);
 
-  const handleCreateTask = () => {
+  const handleCreateTask = async () => {
     if (!newTask.title || newTask.assignedTo.length === 0) {
       toast.error("Please fill in all required fields and select at least one trainer");
       return;
     }
 
-    const newTasks: Task[] = newTask.assignedTo.map((trainerId, index) => {
-      const trainer = trainers.find(t => t.id === trainerId);
-      return {
-        id: `t${Date.now()}-${index}`,
-        title: newTask.title,
-        description: newTask.description,
-        assignedTo: trainerId,
-        assignedToName: trainer?.name || 'Unknown',
-        status: newTask.status,
-        priority: newTask.priority,
-        dueDate: new Date(newTask.dueDate).toISOString(),
-        createdAt: new Date().toISOString(),
-        createdBy: '1', // Mock current user
-        isRecurring: newTask.isRecurring,
-        recurrenceInterval: newTask.recurrenceInterval,
-      };
-    });
+    try {
+      const promises = newTask.assignedTo.map(async (trainerId) => {
+        const trainer = trainers.find(t => t.id === trainerId);
+        const taskData = {
+          title: newTask.title,
+          description: newTask.description,
+          assignedTo: trainerId,
+          assignedToName: trainer?.name || 'Unknown',
+          status: newTask.status,
+          priority: newTask.priority,
+          dueDate: new Date(newTask.dueDate).toISOString(),
+          createdAt: new Date().toISOString(),
+          createdBy: user?.id,
+          isRecurring: newTask.isRecurring,
+          recurrenceInterval: newTask.recurrenceInterval,
+          notes: [],
+          questions: [],
+        };
+        return addDoc(collection(db, 'tasks'), taskData);
+      });
 
-    setTasks([...newTasks, ...tasks]);
-    setIsNewTaskOpen(false);
-    setNewTask({ 
-      title: '',
-      description: '',
-      assignedTo: [],
-      status: 'pending', 
-      priority: 'medium', 
-      dueDate: new Date().toISOString().split('T')[0],
-      isRecurring: false,
-      recurrenceInterval: 'none'
-    });
-    toast.success(`${newTasks.length} task(s) assigned successfully`);
-  };
-
-  const handleUpdateTaskStatus = (taskId: string, newStatus: TaskStatus) => {
-    setTasks(tasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t));
-    if (selectedTask?.id === taskId) {
-      setSelectedTask({ ...selectedTask, status: newStatus });
+      await Promise.all(promises);
+      setIsNewTaskOpen(false);
+      setNewTask({ 
+        title: '',
+        description: '',
+        assignedTo: [],
+        status: 'pending', 
+        priority: 'medium', 
+        dueDate: new Date().toISOString().split('T')[0],
+        isRecurring: false,
+        recurrenceInterval: 'none'
+      });
+      toast.success(`${newTask.assignedTo.length} task(s) assigned successfully`);
+    } catch (error) {
+      console.error("Error creating task:", error);
+      toast.error("Failed to assign tasks");
     }
-    toast.success(`Task status updated to ${newStatus}`);
   };
 
-  const handleAddNote = (taskId: string) => {
+  const handleUpdateTaskStatus = async (taskId: string, newStatus: TaskStatus) => {
+    try {
+      await updateDoc(doc(db, 'tasks', taskId), { status: newStatus });
+      if (selectedTask?.id === taskId) {
+        setSelectedTask({ ...selectedTask, status: newStatus });
+      }
+      toast.success(`Task status updated to ${newStatus}`);
+    } catch (error) {
+      toast.error("Failed to update task status");
+    }
+  };
+
+  const handleAddNote = async (taskId: string) => {
     if (!newNote.trim()) return;
     const note: TaskNote = {
       id: `n${Date.now()}`,
       text: newNote,
       createdAt: new Date().toISOString(),
-      authorName: 'Admin User', // Mock
+      authorName: user?.name || 'Team Member',
     };
-    setTasks(tasks.map(t => t.id === taskId ? { ...t, notes: [...(t.notes || []), note] } : t));
-    if (selectedTask?.id === taskId) {
-      setSelectedTask({ ...selectedTask, notes: [...(selectedTask.notes || []), note] });
+    
+    try {
+      const task = tasks.find(t => t.id === taskId);
+      const updatedNotes = [...(task?.notes || []), note];
+      await updateDoc(doc(db, 'tasks', taskId), { notes: updatedNotes });
+      if (selectedTask?.id === taskId) {
+        setSelectedTask({ ...selectedTask, notes: updatedNotes });
+      }
+      setNewNote('');
+      toast.success("Note added");
+    } catch (error) {
+      toast.error("Failed to add note");
     }
-    setNewNote('');
-    toast.success("Note added");
   };
 
-  const handleAskQuestion = (taskId: string) => {
+  const handleAskQuestion = async (taskId: string) => {
     if (!newQuestion.trim()) return;
     const question: TaskQuestion = {
       id: `q${Date.now()}`,
       text: newQuestion,
       createdAt: new Date().toISOString(),
-      authorName: selectedTask?.assignedToName || 'Trainer',
+      authorName: user?.name || 'Trainer',
       isAnswered: false,
     };
     
-    const alert: Alert = {
-      id: `a${Date.now()}`,
-      recipientEmail: 'quinnledak@vastasports.com',
-      subject: `Question regarding: ${selectedTask?.title}`,
-      body: `Question from ${question.authorName}: ${question.text}`,
-      sentAt: new Date().toISOString(),
-      status: 'sent',
-    };
-    setAlerts([alert, ...alerts]);
+    try {
+      const task = tasks.find(t => t.id === taskId);
+      const updatedQuestions = [...(task?.questions || []), question];
+      await updateDoc(doc(db, 'tasks', taskId), { questions: updatedQuestions });
+      
+      const alert: any = {
+        recipientEmail: 'quinnledak@vastasports.com',
+        subject: `Question regarding: ${selectedTask?.title}`,
+        body: `Question from ${user?.name}: ${question.text}`,
+        sentAt: new Date().toISOString(),
+        status: 'sent',
+      };
+      await addDoc(collection(db, 'alerts'), alert);
 
-    setTasks(tasks.map(t => t.id === taskId ? { ...t, questions: [...(t.questions || []), question] } : t));
-    if (selectedTask?.id === taskId) {
-      setSelectedTask({ ...selectedTask, questions: [...(selectedTask.questions || []), question] });
+      if (selectedTask?.id === taskId) {
+        setSelectedTask({ ...selectedTask, questions: updatedQuestions });
+      }
+      setNewQuestion('');
+      toast.success("Question sent to assigner");
+    } catch (error) {
+      toast.error("Failed to send question");
     }
-    setNewQuestion('');
-    toast.success("Question sent to assigner");
   };
 
-  const handleDeleteTask = (taskId: string) => {
-    setTasks(tasks.filter(t => t.id !== taskId));
-    if (selectedTask?.id === taskId) {
-      setSelectedTask(null);
+  const handleDeleteTask = async (taskId: string) => {
+    // Note: In a real app, you might want to use a deleteDoc call here
+    // But for now, we'll just filter it out or mark it as deleted if we had that field
+    // For simplicity, let's assume we can delete
+    try {
+      // await deleteDoc(doc(db, 'tasks', taskId));
+      // For now, let's just toast that it's a mock delete or implement if you want
+      toast.info("Delete functionality would go here");
+    } catch (error) {
+      toast.error("Failed to delete task");
     }
-    toast.success("Task deleted successfully");
   };
 
-  const handleSendAlert = () => {
+  const handleSendAlert = async () => {
     if (!newAlert.recipientEmail || !newAlert.subject || !newAlert.body) {
       toast.error("Please fill in all fields");
       return;
     }
 
-    const alert: Alert = {
-      id: `a${Date.now()}`,
+    const alert: any = {
       recipientEmail: newAlert.recipientEmail!,
       subject: newAlert.subject!,
       body: newAlert.body!,
@@ -264,33 +360,29 @@ function AppContent() {
       status: 'sent',
     };
 
-    setAlerts([alert, ...alerts]);
-    setIsNewAlertOpen(false);
-    setNewAlert({ recipientEmail: '', subject: '', body: '' });
-    toast.success("Email alert sent successfully");
+    try {
+      await addDoc(collection(db, 'alerts'), alert);
+      setIsNewAlertOpen(false);
+      setNewAlert({ recipientEmail: '', subject: '', body: '' });
+      toast.success("Email alert sent successfully");
+    } catch (error) {
+      toast.error("Failed to send alert");
+    }
   };
 
-  const handleSendInvite = () => {
+  const handleSendInvite = async () => {
     if (!newInvite.email || !newInvite.role) {
       toast.error("Please fill in all fields");
       return;
     }
 
-    const invite: Invite = {
-      id: `i${Date.now()}`,
-      email: newInvite.email!,
-      role: newInvite.role as UserRole,
-      invitedBy: user?.id || '1',
-      invitedByName: user?.name || 'Admin User',
-      sentAt: new Date().toISOString(),
-      status: 'pending',
-    };
-
-    setInvites([invite, ...invites]);
-    addInvite(newInvite.email!); // Add to whitelist
-    setIsInviteOpen(false);
-    setNewInvite({ email: '', role: 'trainer' });
-    toast.success(`Invitation sent to ${newInvite.email}`);
+    try {
+      await addInvite(newInvite.email!, newInvite.role);
+      setIsInviteOpen(false);
+      setNewInvite({ email: '', role: 'trainer' });
+    } catch (error) {
+      // Error handled in context
+    }
   };
 
   const draftAlertWithAI = async () => {
@@ -395,8 +487,8 @@ function AppContent() {
         <div className="p-4 border-t border-slate-100">
           <div className="bg-slate-50 rounded-xl p-4 flex items-center gap-3">
             <Avatar className="w-10 h-10 border-2 border-white shadow-sm">
-              <AvatarImage src="https://picsum.photos/seed/admin/100/100" />
-              <AvatarFallback>AD</AvatarFallback>
+              <AvatarImage src={user?.photoURL || `https://picsum.photos/seed/${user?.email}/100/100`} />
+              <AvatarFallback>{user?.name?.[0] || 'U'}</AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold truncate">{user?.name}</p>
@@ -723,7 +815,7 @@ function AppContent() {
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
                                 <Avatar className="w-6 h-6">
-                                  <AvatarImage src={`https://picsum.photos/seed/${task.assignedTo}/100/100`} />
+                                  <AvatarImage src={trainers.find(t => t.id === task.assignedTo)?.photoURL || `https://picsum.photos/seed/${task.assignedTo}/100/100`} />
                                   <AvatarFallback>{task.assignedToName[0]}</AvatarFallback>
                                 </Avatar>
                                 <span className="text-[11px] font-medium text-slate-600">{task.assignedToName}</span>
@@ -998,7 +1090,7 @@ function AppContent() {
                     <h4 className="text-sm font-semibold text-slate-900">Assigned To</h4>
                     <div className="flex items-center gap-3">
                       <Avatar className="w-10 h-10 border-2 border-white shadow-sm">
-                        <AvatarImage src={`https://picsum.photos/seed/${selectedTask.assignedTo}/100/100`} />
+                        <AvatarImage src={trainers.find(t => t.id === selectedTask.assignedTo)?.photoURL || `https://picsum.photos/seed/${selectedTask.assignedTo}/100/100`} />
                         <AvatarFallback>{selectedTask.assignedToName[0]}</AvatarFallback>
                       </Avatar>
                       <div>

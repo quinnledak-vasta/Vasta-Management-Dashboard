@@ -1,4 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  onAuthStateChanged, 
+  signOut,
+  User as FirebaseUser
+} from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, db } from './firebase';
 import { toast } from 'sonner';
 
 interface User {
@@ -12,74 +21,111 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string) => Promise<void>;
-  logout: () => void;
-  invitedEmails: string[];
-  addInvite: (email: string) => void;
+  login: () => Promise<void>;
+  logout: () => Promise<void>;
+  addInvite: (email: string, role: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Initial invited emails (whitelist)
-const INITIAL_INVITES = [
-  'quinnledak@vastasports.com', // The owner/admin
-  'alex@vasta.com',
-  'sarah@vasta.com',
-  'mike@vasta.com',
-  'emma@vasta.com'
-];
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [invitedEmails, setInvitedEmails] = useState<string[]>(INITIAL_INVITES);
 
   useEffect(() => {
-    // Check local storage for existing session
-    const savedUser = localStorage.getItem('vasta_user');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
-    setLoading(false);
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        await handleUserSync(firebaseUser);
+      } else {
+        setUser(null);
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const login = async (email: string) => {
-    setLoading(true);
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 800));
+  const handleUserSync = async (firebaseUser: FirebaseUser) => {
+    try {
+      // 1. Check if user exists in our 'users' collection
+      const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+      
+      if (userDoc.exists()) {
+        setUser(userDoc.data() as User);
+      } else {
+        // 2. If not, check if they are invited
+        const inviteDoc = await getDoc(doc(db, 'invites', firebaseUser.email?.toLowerCase() || ''));
+        
+        // Special case for the owner
+        const isOwner = firebaseUser.email === 'quinnledak@vastasports.com';
 
-    if (invitedEmails.includes(email.toLowerCase())) {
-      const mockUser: User = {
-        id: email === 'quinnledak@vastasports.com' ? 'admin-1' : `user-${Date.now()}`,
-        name: email.split('@')[0].charAt(0).toUpperCase() + email.split('@')[0].slice(1),
-        email: email.toLowerCase(),
-        role: email === 'quinnledak@vastasports.com' ? 'admin' : 'trainer',
-        photoURL: `https://picsum.photos/seed/${email}/100/100`
-      };
-      setUser(mockUser);
-      localStorage.setItem('vasta_user', JSON.stringify(mockUser));
-      toast.success('Successfully signed in');
-    } else {
-      toast.error('Access Denied: You have not been invited to this team.');
-      throw new Error('Not invited');
+        if (inviteDoc.exists() || isOwner) {
+          const role = isOwner ? 'admin' : (inviteDoc.data()?.role || 'trainer');
+          const newUser: User = {
+            id: firebaseUser.uid,
+            name: firebaseUser.displayName || 'Team Member',
+            email: firebaseUser.email || '',
+            role: role as 'admin' | 'trainer',
+            photoURL: firebaseUser.photoURL || undefined
+          };
+          
+          await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
+          setUser(newUser);
+          
+          if (inviteDoc.exists()) {
+            await setDoc(doc(db, 'invites', firebaseUser.email!.toLowerCase()), { status: 'accepted' }, { merge: true });
+          }
+        } else {
+          // Not invited
+          await signOut(auth);
+          toast.error('Access Denied: You have not been invited to this team.');
+        }
+      }
+    } catch (error) {
+      console.error('Error syncing user:', error);
+      toast.error('Authentication error. Please try again.');
     }
-    setLoading(false);
   };
 
-  const logout = () => {
-    setUser(null);
-    localStorage.removeItem('vasta_user');
-    toast.info('Signed out');
+  const login = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+      toast.success('Successfully signed in');
+    } catch (error) {
+      console.error('Login error:', error);
+      toast.error('Failed to sign in with Google');
+    }
   };
 
-  const addInvite = (email: string) => {
-    if (!invitedEmails.includes(email.toLowerCase())) {
-      setInvitedEmails(prev => [...prev, email.toLowerCase()]);
+  const logout = async () => {
+    try {
+      await signOut(auth);
+      toast.info('Signed out');
+    } catch (error) {
+      toast.error('Error signing out');
+    }
+  };
+
+  const addInvite = async (email: string, role: string) => {
+    try {
+      await setDoc(doc(db, 'invites', email.toLowerCase()), {
+        email: email.toLowerCase(),
+        role,
+        invitedBy: user?.id,
+        invitedByName: user?.name,
+        sentAt: new Date().toISOString(),
+        status: 'pending'
+      });
+      toast.success(`Invitation sent to ${email}`);
+    } catch (error) {
+      console.error('Invite error:', error);
+      toast.error('Failed to send invitation');
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, invitedEmails, addInvite }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, addInvite }}>
       {children}
     </AuthContext.Provider>
   );

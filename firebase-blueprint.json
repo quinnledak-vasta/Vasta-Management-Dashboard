@@ -2,105 +2,93 @@
   "entities": {
     "Task": {
       "title": "Task",
-      "description": "An administrative task assigned to a trainer",
+      "description": "An administrative task assigned to team members",
       "type": "object",
       "properties": {
-        "title": { "type": "string", "description": "The title of the task" },
-        "description": { "type": "string", "description": "Detailed description of the task" },
-        "assignedTo": { "type": "string", "description": "UID of the trainer assigned to the task" },
-        "assignedToName": { "type": "string", "description": "Name of the trainer assigned to the task" },
-        "status": { "type": "string", "enum": ["pending", "in-progress", "completed"], "description": "Current status of the task" },
-        "priority": { "type": "string", "enum": ["low", "medium", "high"], "description": "Priority level" },
-        "dueDate": { "type": "string", "format": "date-time", "description": "When the task is due" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "When the task was created" },
-        "createdBy": { "type": "string", "description": "UID of the user who created the task" },
-        "isRecurring": { "type": "boolean", "description": "Whether the task repeats" },
-        "recurrenceInterval": { "type": "string", "enum": ["daily", "weekly", "monthly", "none"], "frequency": "Frequency of recurrence" },
-        "notes": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": { "type": "string" },
-              "text": { "type": "string" },
-              "createdAt": { "type": "string", "format": "date-time" },
-              "authorName": { "type": "string" }
-            }
-          }
-        },
-        "questions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": { "type": "string" },
-              "text": { "type": "string" },
-              "createdAt": { "type": "string", "format": "date-time" },
-              "authorName": { "type": "string" },
-              "isAnswered": { "type": "boolean" },
-              "answer": { "type": "string" }
-            }
-          }
-        }
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "assignedTo": { "type": "array", "items": { "type": "string" } },
+        "dueDate": { "type": "string", "format": "date" },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+        "status": { "type": "string", "enum": ["pending", "in-progress", "completed"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" },
+        "isRecurring": { "type": "boolean" },
+        "recurrenceInterval": { "type": "string", "enum": ["none", "daily", "weekly", "monthly"] },
+        "notes": { "type": "array", "items": { "$ref": "TaskNote" } },
+        "questions": { "type": "array", "items": { "$ref": "TaskQuestion" } }
       },
-      "required": ["title", "assignedTo", "status", "priority", "isRecurring", "recurrenceInterval"]
+      "required": ["title", "assignedTo", "status", "priority"]
     },
-    "Trainer": {
-      "title": "Trainer",
-      "description": "A personal trainer in the team",
+    "TaskNote": {
+      "title": "TaskNote",
+      "description": "A progress note on a task",
       "type": "object",
       "properties": {
-        "name": { "type": "string", "description": "Full name" },
-        "email": { "type": "string", "format": "email", "description": "Email address" },
-        "role": { "type": "string", "enum": ["admin", "trainer"], "description": "User role" },
-        "photoURL": { "type": "string", "description": "Profile picture URL" }
-      },
-      "required": ["name", "email", "role"]
+        "id": { "type": "string" },
+        "text": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
     },
-    "Alert": {
-      "title": "Alert",
-      "description": "An email alert sent to a trainer",
+    "TaskQuestion": {
+      "title": "TaskQuestion",
+      "description": "A question asked about a task",
       "type": "object",
       "properties": {
-        "recipientEmail": { "type": "string", "description": "Email of the recipient" },
-        "subject": { "type": "string", "description": "Subject of the email" },
-        "body": { "type": "string", "description": "Body of the email" },
-        "sentAt": { "type": "string", "format": "date-time", "description": "When the alert was sent" },
-        "status": { "type": "string", "enum": ["sent", "failed"], "description": "Delivery status" }
-      },
-      "required": ["recipientEmail", "subject", "body", "sentAt"]
+        "id": { "type": "string" },
+        "text": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "answer": { "type": "string" },
+        "answeredAt": { "type": "string", "format": "date-time" },
+        "answeredBy": { "type": "string" }
+      }
     },
     "Invite": {
       "title": "Invite",
       "description": "An invitation for a new team member",
       "type": "object",
       "properties": {
-        "email": { "type": "string", "format": "email", "description": "Email of the invitee" },
-        "role": { "type": "string", "enum": ["admin", "trainer"], "description": "Role to be assigned" },
-        "invitedBy": { "type": "string", "description": "UID of the inviter" },
-        "invitedByName": { "type": "string", "description": "Name of the inviter" },
-        "sentAt": { "type": "string", "format": "date-time", "description": "When the invite was sent" },
-        "status": { "type": "string", "enum": ["pending", "accepted", "expired"], "description": "Current status of the invite" }
-      },
-      "required": ["email", "role", "invitedBy", "sentAt", "status"]
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "trainer"] },
+        "invitedBy": { "type": "string" },
+        "invitedByName": { "type": "string" },
+        "sentAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["pending", "accepted"] }
+      }
+    },
+    "Alert": {
+      "title": "Alert",
+      "description": "An email alert sent to the team",
+      "type": "object",
+      "properties": {
+        "recipientEmail": { "type": "string", "format": "email" },
+        "subject": { "type": "string" },
+        "body": { "type": "string" },
+        "sentAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string" }
+      }
     }
   },
   "firestore": {
     "/tasks/{taskId}": {
       "schema": "Task",
-      "description": "Collection of administrative tasks"
-    },
-    "/trainers/{trainerId}": {
-      "schema": "Trainer",
-      "description": "Collection of team members"
-    },
-    "/alerts/{alertId}": {
-      "schema": "Alert",
-      "description": "Log of sent email alerts"
+      "description": "Collection of tasks"
     },
     "/invites/{inviteId}": {
       "schema": "Invite",
-      "description": "Collection of team invitations"
+      "description": "Collection of authorized email invites"
+    },
+    "/alerts/{alertId}": {
+      "schema": "Alert",
+      "description": "History of sent alerts"
+    },
+    "/users/{userId}": {
+      "schema": "Trainer",
+      "description": "Team member profiles"
     }
   }
 }
