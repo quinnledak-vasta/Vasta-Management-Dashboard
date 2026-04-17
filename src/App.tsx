@@ -76,7 +76,7 @@ import { toast } from 'sonner';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AuthProvider, useAuth } from './lib/AuthContext';
 import { LoginPage } from './components/LoginPage';
-import { db } from './lib/firebase';
+import { db, auth } from './lib/firebase';
 import { 
   collection, 
   onSnapshot, 
@@ -86,7 +86,8 @@ import {
   query, 
   orderBy, 
   Timestamp,
-  setDoc
+  setDoc,
+  getDocFromServer
 } from 'firebase/firestore';
 import { mockTasks, mockTrainers, mockAlerts } from './lib/mockData';
 import { Task, Trainer, Alert, TaskStatus, Priority, Invite, UserRole, RecurrenceInterval, TaskNote, TaskQuestion } from './types';
@@ -94,6 +95,57 @@ import { GoogleGenAI } from "@google/genai";
 
 // Initialize Gemini for drafting alerts
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string;
+    email?: string;
+    emailVerified?: boolean;
+    isAnonymous?: boolean;
+    tenantId?: string | null;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email || undefined,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 export default function App() {
   return (
@@ -114,13 +166,16 @@ function AppContent() {
   // Fetch Tasks from Firestore
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
+    const path = 'tasks';
+    const q = query(collection(db, path), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const taskList = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Task[];
       setTasks(taskList.length > 0 ? taskList : mockTasks);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
   }, [user]);
@@ -128,13 +183,16 @@ function AppContent() {
   // Fetch Trainers from Firestore
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'users'), orderBy('name', 'asc'));
+    const path = 'users';
+    const q = query(collection(db, path), orderBy('name', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const trainerList = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Trainer[];
       setTrainers(trainerList.length > 0 ? trainerList : mockTrainers);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
   }, [user]);
@@ -142,13 +200,16 @@ function AppContent() {
   // Fetch Alerts from Firestore
   useEffect(() => {
     if (!user || user.role !== 'admin') return;
-    const q = query(collection(db, 'alerts'), orderBy('sentAt', 'desc'));
+    const path = 'alerts';
+    const q = query(collection(db, path), orderBy('sentAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const alertList = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Alert[];
       setAlerts(alertList.length > 0 ? alertList : mockAlerts);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
   }, [user]);
@@ -156,13 +217,16 @@ function AppContent() {
   // Fetch Invites from Firestore
   useEffect(() => {
     if (!user || user.role !== 'admin') return;
-    const q = query(collection(db, 'invites'), orderBy('sentAt', 'desc'));
+    const path = 'invites';
+    const q = query(collection(db, path), orderBy('sentAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const inviteList = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Invite[];
       setInvites(inviteList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
   }, [user]);
@@ -224,6 +288,7 @@ function AppContent() {
       return;
     }
 
+    const path = 'tasks';
     try {
       const promises = newTask.assignedTo.map(async (trainerId) => {
         const trainer = trainers.find(t => t.id === trainerId);
@@ -242,7 +307,11 @@ function AppContent() {
           notes: [],
           questions: [],
         };
-        return addDoc(collection(db, 'tasks'), taskData);
+        try {
+          return await addDoc(collection(db, path), taskData);
+        } catch (error) {
+          handleFirestoreError(error, OperationType.CREATE, path);
+        }
       });
 
       await Promise.all(promises);
@@ -260,11 +329,12 @@ function AppContent() {
       toast.success(`${newTask.assignedTo.length} task(s) assigned successfully`);
     } catch (error) {
       console.error("Error creating task:", error);
-      toast.error("Failed to assign tasks");
+      toast.error("Failed to assign tasks. Please check permissions.");
     }
   };
 
   const handleUpdateTaskStatus = async (taskId: string, newStatus: TaskStatus) => {
+    const path = `tasks/${taskId}`;
     try {
       await updateDoc(doc(db, 'tasks', taskId), { status: newStatus });
       if (selectedTask?.id === taskId) {
@@ -272,6 +342,7 @@ function AppContent() {
       }
       toast.success(`Task status updated to ${newStatus}`);
     } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
       toast.error("Failed to update task status");
     }
   };
@@ -285,6 +356,7 @@ function AppContent() {
       authorName: user?.name || 'Team Member',
     };
     
+    const path = `tasks/${taskId}`;
     try {
       const task = tasks.find(t => t.id === taskId);
       const updatedNotes = [...(task?.notes || []), note];
@@ -295,6 +367,7 @@ function AppContent() {
       setNewNote('');
       toast.success("Note added");
     } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
       toast.error("Failed to add note");
     }
   };
@@ -309,6 +382,8 @@ function AppContent() {
       isAnswered: false,
     };
     
+    const taskPath = `tasks/${taskId}`;
+    const alertPath = 'alerts';
     try {
       const task = tasks.find(t => t.id === taskId);
       const updatedQuestions = [...(task?.questions || []), question];
@@ -321,7 +396,7 @@ function AppContent() {
         sentAt: new Date().toISOString(),
         status: 'sent',
       };
-      await addDoc(collection(db, 'alerts'), alert);
+      await addDoc(collection(db, alertPath), alert);
 
       if (selectedTask?.id === taskId) {
         setSelectedTask({ ...selectedTask, questions: updatedQuestions });
@@ -329,19 +404,22 @@ function AppContent() {
       setNewQuestion('');
       toast.success("Question sent to assigner");
     } catch (error) {
+      if (error instanceof Error && error.message.includes('tasks')) {
+        handleFirestoreError(error, OperationType.UPDATE, taskPath);
+      } else {
+        handleFirestoreError(error, OperationType.CREATE, alertPath);
+      }
       toast.error("Failed to send question");
     }
   };
 
   const handleDeleteTask = async (taskId: string) => {
-    // Note: In a real app, you might want to use a deleteDoc call here
-    // But for now, we'll just filter it out or mark it as deleted if we had that field
-    // For simplicity, let's assume we can delete
+    const path = `tasks/${taskId}`;
     try {
       // await deleteDoc(doc(db, 'tasks', taskId));
-      // For now, let's just toast that it's a mock delete or implement if you want
       toast.info("Delete functionality would go here");
     } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
       toast.error("Failed to delete task");
     }
   };
@@ -360,12 +438,14 @@ function AppContent() {
       status: 'sent',
     };
 
+    const path = 'alerts';
     try {
-      await addDoc(collection(db, 'alerts'), alert);
+      await addDoc(collection(db, path), alert);
       setIsNewAlertOpen(false);
       setNewAlert({ recipientEmail: '', subject: '', body: '' });
       toast.success("Email alert sent successfully");
     } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, path);
       toast.error("Failed to send alert");
     }
   };
