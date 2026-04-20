@@ -23,6 +23,7 @@ import {
   LogOut,
   UserPlus,
   Repeat,
+  Trash2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -78,6 +79,7 @@ import {
   onSnapshot, 
   addDoc, 
   updateDoc, 
+  deleteDoc,
   doc, 
   query, 
   orderBy, 
@@ -311,8 +313,10 @@ function AppContent() {
       return;
     }
 
+    const email = newInvite.email.toLowerCase().trim();
+
     const inviteData: Omit<Invite, 'id'> = {
-      email: newInvite.email,
+      email: email,
       role: (newInvite.role as UserRole) || 'trainer',
       status: 'pending',
       invitedBy: user.id,
@@ -321,12 +325,43 @@ function AppContent() {
     };
 
     try {
-      await addDoc(collection(db, 'invites'), inviteData);
+      // Use email as ID for consistency with AuthContext login checks
+      await setDoc(doc(db, 'invites', email), inviteData);
       setNewInvite({ email: '', role: 'trainer' });
       setIsInviteOpen(false);
-      toast.success(`Invite sent successfully to ${newInvite.email}`);
+      toast.success(`Invite sent successfully to ${email}`);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'invites');
+      handleFirestoreError(error, OperationType.WRITE, `invites/${email}`);
+    }
+  };
+
+  const handleRemoveMember = async (trainerId: string) => {
+    if (!user || user.role !== 'admin') return;
+    if (trainerId === user.id) {
+      toast.error("You cannot remove yourself");
+      return;
+    }
+
+    if (!window.confirm("Are you sure you want to remove this member? All their assigned tasks will remain but will no longer be linked to an active user.")) return;
+
+    try {
+      await deleteDoc(doc(db, 'users', trainerId));
+      toast.success("Member removed successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `users/${trainerId}`);
+    }
+  };
+
+  const handleRemoveInvite = async (inviteId: string) => {
+    if (!user || user.role !== 'admin') return;
+
+    if (!window.confirm("Are you sure you want to cancel this invitation?")) return;
+
+    try {
+      await deleteDoc(doc(db, 'invites', inviteId));
+      toast.success("Invitation cancelled successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `invites/${inviteId}`);
     }
   };
 
@@ -732,9 +767,25 @@ function AppContent() {
                           </div>
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button variant="ghost" size="sm" className="text-slate-400 hover:text-red-600">
-                            <ChevronRight className="w-4 h-4" />
-                          </Button>
+                          <div className="flex justify-end gap-2">
+                            {user.role === 'admin' && (
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className="text-slate-400 hover:text-red-600"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  handleRemoveMember(trainer.id);
+                                }}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
+                            <Button variant="ghost" size="sm" className="text-slate-400 hover:text-slate-600">
+                              <ChevronRight className="w-4 h-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -771,9 +822,25 @@ function AppContent() {
                               {format(new Date(invite.sentAt), 'MMM d, yyyy')}
                             </TableCell>
                             <TableCell className="text-right">
-                              <Badge className="bg-amber-50 text-amber-700 border-amber-100 capitalize">
-                                {invite.status}
-                              </Badge>
+                              <div className="flex justify-end gap-3 items-center">
+                                <Badge className="bg-amber-50 text-amber-700 border-amber-100 capitalize">
+                                  {invite.status}
+                                </Badge>
+                                {user.role === 'admin' && (
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className="h-8 w-8 p-0 text-slate-400 hover:text-red-600"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      handleRemoveInvite(invite.id);
+                                    }}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                )}
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
