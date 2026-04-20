@@ -2,70 +2,90 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     // ===============================================================
-    // Assumed Data Model
-    // ===============================================================
-    //
-    // Collection: tasks
-    // Fields: title, description, assignedTo (array), dueDate, priority, status, createdAt, createdBy, notes (array), questions (array)
-    //
-    // Collection: invites
-    // Fields: email, role, invitedBy, invitedByName, sentAt, status
-    //
-    // Collection: alerts
-    // Fields: recipientEmail, subject, body, sentAt, status
-    //
-    // ===============================================================
-
-    // ===============================================================
     // Helper Functions
     // ===============================================================
-    
     function isAuthenticated() {
       return request.auth != null;
     }
-    
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
     function isAdmin() {
       return isAuthenticated() && 
-        (request.auth.token.email == "quinnledak@vastasports.com" || 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+        (request.auth.token.email == 'quinnledak@vastasports.com' || 
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
     }
 
-    function isInvited() {
-      return isAuthenticated() && 
-        exists(/databases/$(database)/documents/invites/$(request.auth.token.email.lower()));
-    }
-
+    // ===============================================================
+    // Validation Functions
+    // ===============================================================
     function isValidTask(data) {
       return data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
-             (data.assignedTo is string || data.assignedTo is list) &&
+             data.description is string &&
+             data.assignedTo is string && 
+             data.assignedToName is string &&
+             data.status in ['pending', 'in-progress', 'completed'] &&
              data.priority in ['low', 'medium', 'high'] &&
-             data.status in ['pending', 'in-progress', 'completed'];
+             data.dueDate is string &&
+             data.createdAt is string &&
+             data.createdBy is string &&
+             data.isRecurring is bool &&
+             data.recurrenceInterval in ['daily', 'weekly', 'monthly', 'none'];
+    }
+
+    function isValidUser(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.email is string &&
+             data.role in ['admin', 'trainer'];
+    }
+
+    function isValidInvite(data) {
+      return data.email is string &&
+             data.role in ['admin', 'trainer'] &&
+             data.status in ['pending', 'accepted', 'expired'] &&
+             data.invitedBy is string &&
+             data.invitedByName is string &&
+             data.sentAt is string;
     }
 
     // ===============================================================
-    // Rules
+    // Routes
     // ===============================================================
 
+    // Users collection
+    match /users/{userId} {
+      allow get: if isAuthenticated();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data)) || isAdmin();
+    }
+
+    // Tasks collection
     match /tasks/{taskId} {
-      allow read: if isAuthenticated() && (isInvited() || isAdmin());
+      allow read: if isAuthenticated();
       allow create: if isAdmin() && isValidTask(request.resource.data);
-      allow update: if isAuthenticated() && (isInvited() || isAdmin()) && isValidTask(request.resource.data);
+      allow update: if (isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.assignedTo)) && isValidTask(request.resource.data);
       allow delete: if isAdmin();
     }
 
+    // Invites collection
     match /invites/{email} {
+      allow read: if isAdmin() || (isAuthenticated() && request.auth.token.email.lower() == email.lower());
+      allow write: if isAdmin() && isValidInvite(request.resource.data);
+    }
+
+    // Alerts collection
+    match /alerts/{alertId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
-
-    match /alerts/{alertId} {
-      allow read: if isAdmin();
-      allow create: if isAdmin();
-    }
-
-    match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && request.auth.uid == userId;
+    
+    // Default deny for everything else
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

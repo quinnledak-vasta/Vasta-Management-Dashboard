@@ -2,93 +2,44 @@
   "entities": {
     "Task": {
       "title": "Task",
-      "description": "An administrative task assigned to team members",
+      "description": "A management task assigned to a trainer",
       "type": "object",
       "properties": {
         "title": { "type": "string" },
         "description": { "type": "string" },
-        "assignedTo": { "type": "array", "items": { "type": "string" } },
-        "dueDate": { "type": "string", "format": "date" },
-        "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+        "assignedTo": { "type": "string" },
+        "assignedToName": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "in-progress", "completed"] },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+        "dueDate": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "createdBy": { "type": "string" },
         "isRecurring": { "type": "boolean" },
-        "recurrenceInterval": { "type": "string", "enum": ["none", "daily", "weekly", "monthly"] },
-        "notes": { "type": "array", "items": { "$ref": "TaskNote" } },
-        "questions": { "type": "array", "items": { "$ref": "TaskQuestion" } }
+        "recurrenceInterval": { "type": "string", "enum": ["daily", "weekly", "monthly", "none"] },
+        "notes": { "type": "array" },
+        "questions": { "type": "array" }
       },
-      "required": ["title", "assignedTo", "status", "priority"]
+      "required": ["title", "assignedTo", "status", "priority", "dueDate"]
     },
-    "TaskNote": {
-      "title": "TaskNote",
-      "description": "A progress note on a task",
+    "User": {
+      "title": "User",
+      "description": "A system user",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "text": { "type": "string" },
-        "authorId": { "type": "string" },
-        "authorName": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
-      }
-    },
-    "TaskQuestion": {
-      "title": "TaskQuestion",
-      "description": "A question asked about a task",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "text": { "type": "string" },
-        "authorId": { "type": "string" },
-        "authorName": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "answer": { "type": "string" },
-        "answeredAt": { "type": "string", "format": "date-time" },
-        "answeredBy": { "type": "string" }
-      }
-    },
-    "Invite": {
-      "title": "Invite",
-      "description": "An invitation for a new team member",
-      "type": "object",
-      "properties": {
+        "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
-        "role": { "type": "string", "enum": ["admin", "trainer"] },
-        "invitedBy": { "type": "string" },
-        "invitedByName": { "type": "string" },
-        "sentAt": { "type": "string", "format": "date-time" },
-        "status": { "type": "string", "enum": ["pending", "accepted"] }
-      }
-    },
-    "Alert": {
-      "title": "Alert",
-      "description": "An email alert sent to the team",
-      "type": "object",
-      "properties": {
-        "recipientEmail": { "type": "string", "format": "email" },
-        "subject": { "type": "string" },
-        "body": { "type": "string" },
-        "sentAt": { "type": "string", "format": "date-time" },
-        "status": { "type": "string" }
+        "role": { "type": "string", "enum": ["admin", "trainer"] }
       }
     }
   },
   "firestore": {
     "/tasks/{taskId}": {
       "schema": "Task",
-      "description": "Collection of tasks"
-    },
-    "/invites/{inviteId}": {
-      "schema": "Invite",
-      "description": "Collection of authorized email invites"
-    },
-    "/alerts/{alertId}": {
-      "schema": "Alert",
-      "description": "History of sent alerts"
+      "description": "Global tasks collection"
     },
     "/users/{userId}": {
-      "schema": "Trainer",
-      "description": "Team member profiles"
+      "schema": "User",
+      "description": "User profiles"
     }
   }
 }

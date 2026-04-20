@@ -1,10 +1,10 @@
 {
+  "projectId": "vasta-management-dashboard",
+  "appId": "1:144319608981:web:01e03fc0802482450f439c",
   "apiKey": "AIzaSyDZqemGyX29WLKK_5MLKnHZiVRQ5aIG3XQ",
   "authDomain": "vasta-management-dashboard.firebaseapp.com",
-  "projectId": "vasta-management-dashboard",
+  "firestoreDatabaseId": "ai-studio-2f5950b5-ff95-42cf-b252-dc69c1c67cca",
   "storageBucket": "vasta-management-dashboard.firebasestorage.app",
   "messagingSenderId": "144319608981",
-  "appId": "1:144319608981:web:8491bb8b9931fe500f439c",
-  "measurementId": "G-Y0D4S8NMHW",
-  "firestoreDatabaseId": "(default)"
+  "measurementId": ""
 }
