@@ -85,7 +85,8 @@ import {
   orderBy, 
   Timestamp,
   setDoc,
-  getDocFromServer
+  getDocFromServer,
+  arrayUnion
 } from 'firebase/firestore';
 import { Task, Trainer, Alert, TaskStatus, Priority, Invite, UserRole, RecurrenceInterval, TaskNote, TaskQuestion } from './types';
 import { GoogleGenAI } from "@google/genai";
@@ -233,7 +234,12 @@ function AppContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [newQuestion, setNewQuestion] = useState('');
+
+  const selectedTask = useMemo(() => {
+    return tasks.find(t => t.id === selectedTaskId) || null;
+  }, [tasks, selectedTaskId]);
 
   // Simple New Task Form State
   const [newTask, setNewTask] = useState({
@@ -362,6 +368,45 @@ function AppContent() {
       toast.success("Invitation cancelled successfully");
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `invites/${inviteId}`);
+    }
+  };
+
+  const handleAddQuestion = async (taskId: string) => {
+    if (!newQuestion.trim() || !user) return;
+
+    const question: TaskQuestion = {
+      id: crypto.randomUUID(),
+      text: newQuestion.trim(),
+      createdAt: new Date().toISOString(),
+      authorName: user.name,
+      isAnswered: false
+    };
+
+    try {
+      await updateDoc(doc(db, 'tasks', taskId), {
+        questions: arrayUnion(question)
+      });
+      setNewQuestion('');
+      toast.success("Question posted");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `tasks/${taskId}`);
+    }
+  };
+
+  const handleAnswerQuestion = async (taskId: string, questionId: string, answer: string) => {
+    if (!answer.trim() || !user || !selectedTask) return;
+
+    const updatedQuestions = (selectedTask.questions || []).map(q => 
+      q.id === questionId ? { ...q, isAnswered: true, answer: answer.trim() } : q
+    );
+
+    try {
+      await updateDoc(doc(db, 'tasks', taskId), {
+        questions: updatedQuestions
+      });
+      toast.success("Answer posted");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `tasks/${taskId}`);
     }
   };
 
@@ -589,7 +634,7 @@ function AppContent() {
                         <Card 
                           key={task.id} 
                           className="group hover:shadow-md transition-all duration-200 border-slate-200 cursor-pointer"
-                          onClick={() => setSelectedTask(task)}
+                          onClick={() => setSelectedTaskId(task.id)}
                         >
                           <CardHeader className="p-4 pb-2">
                             <div className="flex justify-between items-start">
@@ -855,7 +900,7 @@ function AppContent() {
       </main>
 
       {/* Task Detail Dialog */}
-      <Dialog open={!!selectedTask} onOpenChange={(open) => !open && setSelectedTask(null)}>
+      <Dialog open={!!selectedTaskId} onOpenChange={(open) => !open && setSelectedTaskId(null)}>
         <DialogContent className="sm:max-w-[500px]">
           {selectedTask && (
             <>
@@ -901,6 +946,81 @@ function AppContent() {
                   </div>
                 </div>
 
+                <div className="space-y-4 pt-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold text-slate-900">Questions & Discussion</h4>
+                    <Badge variant="secondary" className="text-[10px]">
+                      {(selectedTask.questions?.length || 0)}
+                    </Badge>
+                  </div>
+                  
+                  <div className="space-y-3 max-h-[200px] overflow-y-auto pr-2 custom-scrollbar">
+                    {(selectedTask.questions || []).length === 0 ? (
+                      <p className="text-xs text-slate-400 italic text-center py-4">No questions yet</p>
+                    ) : (
+                      (selectedTask.questions || []).map((q) => (
+                        <div key={q.id} className="bg-slate-50 rounded-lg p-3 space-y-2 border border-slate-100">
+                          <div className="flex justify-between items-start">
+                            <span className="text-[10px] font-bold text-red-600 uppercase">{q.authorName}</span>
+                            <span className="text-[9px] text-slate-400">{format(new Date(q.createdAt), 'MMM d, h:mm a')}</span>
+                          </div>
+                          <p className="text-xs text-slate-700">{q.text}</p>
+                          
+                          {q.isAnswered ? (
+                            <div className="mt-2 pl-3 border-l-2 border-green-200 bg-green-50/50 p-2 rounded-r-md">
+                              <p className="text-[10px] font-bold text-green-700 uppercase mb-1">Answer</p>
+                              <p className="text-xs text-slate-600">{q.answer}</p>
+                            </div>
+                          ) : (
+                            user?.role === 'admin' && (
+                              <div className="mt-2 flex gap-2">
+                                <Input 
+                                  placeholder="Type answer..." 
+                                  className="h-7 text-xs"
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleAnswerQuestion(selectedTask.id, q.id, (e.target as HTMLInputElement).value);
+                                      (e.target as HTMLInputElement).value = '';
+                                    }
+                                  }}
+                                />
+                                <Button size="sm" className="h-7 text-[10px] px-2" onClick={(e) => {
+                                  const input = (e.currentTarget.previousSibling as HTMLInputElement);
+                                  handleAnswerQuestion(selectedTask.id, q.id, input.value);
+                                  input.value = '';
+                                }}>
+                                  Reply
+                                </Button>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Input 
+                      placeholder="Ask a question..." 
+                      value={newQuestion}
+                      onChange={(e) => setNewQuestion(e.target.value)}
+                      className="text-xs focus-visible:ring-red-500"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newQuestion.trim()) {
+                          handleAddQuestion(selectedTask.id);
+                        }
+                      }}
+                    />
+                    <Button 
+                      size="sm" 
+                      className="bg-red-600 hover:bg-red-700 h-9"
+                      onClick={() => handleAddQuestion(selectedTask.id)}
+                    >
+                      <Send className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+
                 <div className="space-y-3">
                   <h4 className="text-sm font-semibold text-slate-900">Update Status</h4>
                   <div className="flex gap-2">
@@ -912,7 +1032,6 @@ function AppContent() {
                         className={`capitalize ${selectedTask.status === status ? 'bg-red-600 hover:bg-red-700' : ''}`}
                         onClick={() => {
                           handleUpdateTaskStatus(selectedTask.id, status);
-                          setSelectedTask(prev => prev ? ({ ...prev, status }) : null);
                         }}
                       >
                         {status.replace('-', ' ')}
@@ -924,7 +1043,7 @@ function AppContent() {
 
               <DialogFooter className="sm:justify-between items-center">
                 <p className="text-[10px] text-slate-400">Created {format(new Date(selectedTask.createdAt), 'MMM d, yyyy')}</p>
-                <Button variant="outline" onClick={() => setSelectedTask(null)}>Close</Button>
+                <Button variant="outline" onClick={() => setSelectedTaskId(null)}>Close</Button>
               </DialogFooter>
             </>
           )}
