@@ -14,6 +14,8 @@ import {
   MoreVertical, 
   Clock, 
   Calendar,
+  CalendarDays,
+  Umbrella,
   AlertCircle, 
   CheckCircle2,
   Mail,
@@ -24,9 +26,10 @@ import {
   UserPlus,
   Repeat,
   Trash2,
+  Edit2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { format } from 'date-fns';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -88,7 +91,22 @@ import {
   getDocFromServer,
   arrayUnion
 } from 'firebase/firestore';
-import { Task, Trainer, Alert, TaskStatus, Priority, Invite, UserRole, RecurrenceInterval, TaskNote, TaskQuestion } from './types';
+import { 
+  Task, 
+  Trainer, 
+  Alert, 
+  TaskStatus, 
+  Priority, 
+  Invite, 
+  UserRole, 
+  RecurrenceInterval, 
+  TaskNote, 
+  TaskQuestion,
+  StaffMember,
+  VacationRequest,
+  VacationStatus,
+  Location
+} from './types';
 import { GoogleGenAI } from "@google/genai";
 
 // Initialize Gemini for drafting alerts
@@ -160,6 +178,8 @@ function AppContent() {
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
+  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
+  const [vacations, setVacations] = useState<VacationRequest[]>([]);
 
   // Fetch Tasks from Firestore
   useEffect(() => {
@@ -230,12 +250,67 @@ function AppContent() {
     });
     return () => unsubscribe();
   }, [user]);
+
+  // Fetch Staff Members from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const path = 'staff';
+    const q = query(collection(db, path), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const staffList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as StaffMember[];
+      setStaffMembers(staffList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Vacations from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const path = 'vacations';
+    const q = query(collection(db, path), orderBy('startDate', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const vacationList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as VacationRequest[];
+      setVacations(vacationList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
   const [activeTab, setActiveTab] = useState('tasks');
+  const [currentMonth, setCurrentMonth] = useState(new Date());
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [isNewStaffOpen, setIsNewStaffOpen] = useState(false);
+  const [isNewVacationOpen, setIsNewVacationOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [newQuestion, setNewQuestion] = useState('');
+
+  const [newStaff, setNewStaff] = useState({
+    name: '',
+    location: 'Dorset Street' as Location,
+    department: '',
+    status: 'active' as const
+  });
+
+  const [newVacation, setNewVacation] = useState({
+    staffId: '',
+    startDate: new Date().toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0],
+    type: 'vacation' as const,
+    hours: 8,
+    notes: ''
+  });
+  const [editingVacationId, setEditingVacationId] = useState<string | null>(null);
 
   const selectedTask = useMemo(() => {
     return tasks.find(t => t.id === selectedTaskId) || null;
@@ -371,6 +446,127 @@ function AppContent() {
     }
   };
 
+  const handleCreateStaff = async () => {
+    if (!newStaff.name || !newStaff.location) {
+      toast.error("Name and location are required");
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'staff'), newStaff);
+      setNewStaff({ name: '', location: 'Dorset Street', department: '', status: 'active' });
+      setIsNewStaffOpen(false);
+      toast.success("Staff member added");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'staff');
+    }
+  };
+
+  const handleRemoveStaff = async (staffId: string) => {
+    if (!user || user.role !== 'admin') return;
+    if (!window.confirm("Are you sure you want to remove this staff member? All their vacation records will remain.")) return;
+    try {
+      await deleteDoc(doc(db, 'staff', staffId));
+      toast.success("Staff member removed");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `staff/${staffId}`);
+    }
+  };
+
+  const handleCreateVacation = async () => {
+    if (!newVacation.staffId || !newVacation.startDate || !newVacation.endDate) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+    const staff = staffMembers.find(s => s.id === newVacation.staffId);
+    const start = new Date(newVacation.startDate);
+    const end = new Date(newVacation.endDate);
+    const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+    try {
+      if (editingVacationId) {
+        const vacationData = {
+          staffId: newVacation.staffId,
+          staffName: staff?.name || 'Unknown',
+          startDate: newVacation.startDate,
+          endDate: newVacation.endDate,
+          type: newVacation.type,
+          hours: Number(newVacation.hours) || 8,
+          notes: newVacation.notes,
+          totalDays,
+          updatedAt: new Date().toISOString()
+        };
+        await updateDoc(doc(db, 'vacations', editingVacationId), vacationData);
+        toast.success("Vacation request updated");
+      } else {
+        const vacationData = {
+          staffId: newVacation.staffId,
+          staffName: staff?.name || 'Unknown',
+          startDate: newVacation.startDate,
+          endDate: newVacation.endDate,
+          status: 'pending' as VacationStatus,
+          type: newVacation.type,
+          hours: Number(newVacation.hours) || 8,
+          notes: newVacation.notes,
+          createdAt: new Date().toISOString(),
+          totalDays
+        };
+        await addDoc(collection(db, 'vacations'), vacationData);
+        toast.success("Vacation request submitted");
+      }
+
+      setNewVacation({ 
+        staffId: '', 
+        startDate: new Date().toISOString().split('T')[0], 
+        endDate: new Date().toISOString().split('T')[0], 
+        type: 'vacation', 
+        hours: 8,
+        notes: '' 
+      });
+      setIsNewVacationOpen(false);
+      setEditingVacationId(null);
+    } catch (error) {
+      handleFirestoreError(error, editingVacationId ? OperationType.UPDATE : OperationType.CREATE, 'vacations');
+    }
+  };
+
+  const handleEditVacation = (vacation: VacationRequest) => {
+    if (user?.role !== 'admin') {
+      toast.error("Only administrators can edit vacation requests.");
+      return;
+    }
+    setNewVacation({
+      staffId: vacation.staffId,
+      startDate: vacation.startDate,
+      endDate: vacation.endDate,
+      type: vacation.type,
+      hours: vacation.hours || 8,
+      notes: vacation.notes || ''
+    });
+    setEditingVacationId(vacation.id);
+    setIsNewVacationOpen(true);
+  };
+
+  const handleUpdateVacationStatus = async (vacationId: string, status: VacationStatus) => {
+    if (!user || user.role !== 'admin') return;
+    try {
+      await updateDoc(doc(db, 'vacations', vacationId), { status });
+      toast.success(`Vacation request ${status}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `vacations/${vacationId}`);
+    }
+  };
+
+  const handleRemoveVacation = async (vacationId: string) => {
+    if (!user || user.role !== 'admin') return;
+    if (!window.confirm("Are you sure you want to delete this vacation record?")) return;
+    try {
+      await deleteDoc(doc(db, 'vacations', vacationId));
+      toast.success("Vacation record deleted");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `vacations/${vacationId}`);
+    }
+  };
+
   const handleAddQuestion = async (taskId: string) => {
     if (!newQuestion.trim() || !user) return;
 
@@ -426,6 +622,18 @@ function AppContent() {
     }
   };
 
+  const getVacationsForDay = (date: Date) => {
+    return vacations.filter(v => {
+      try {
+        const start = parseISO(v.startDate);
+        const end = parseISO(v.endDate);
+        return isWithinInterval(date, { start, end });
+      } catch (e) {
+        return false;
+      }
+    });
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -468,6 +676,13 @@ function AppContent() {
           >
             <Users className="w-5 h-5" />
             <span>Team</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('vacations')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'vacations' ? 'bg-red-50 text-red-700 font-semibold' : 'text-slate-600 hover:bg-slate-50'}`}
+          >
+            <Umbrella className="w-5 h-5" />
+            <span>Vacations</span>
           </button>
         </nav>
 
@@ -895,6 +1110,386 @@ function AppContent() {
                 </div>
               )}
             </motion.div>
+          )}
+          {activeTab === 'vacations' && (
+            <Tabs defaultValue="calendar" className="w-full">
+              <motion.div 
+                key="vacations"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="flex-shrink-0">
+                    <h3 className="text-xl font-bold text-slate-900 leading-tight">Staff Schedule & Vacations</h3>
+                    <p className="text-[11px] text-slate-500">Manage time-off requests for your team.</p>
+                  </div>
+
+                  <TabsList className="bg-slate-50 border border-slate-100 p-0.5 rounded-lg w-full md:w-auto">
+                    <TabsTrigger value="calendar" className="rounded-md py-1 px-3 text-[10px] gap-1.5 h-7">
+                      <CalendarDays className="w-3 h-3" />
+                      Calendar
+                    </TabsTrigger>
+                    <TabsTrigger value="requests" className="rounded-md py-1 px-3 text-[10px] gap-1.5 h-7">
+                      <Clock className="w-3 h-3" />
+                      Requests
+                    </TabsTrigger>
+                  </TabsList>
+
+                  <div className="flex gap-2 flex-shrink-0">
+                  <Dialog open={isNewStaffOpen} onOpenChange={setIsNewStaffOpen}>
+                    <DialogTrigger
+                      render={
+                        <Button variant="outline" className="gap-2">
+                          <Users className="w-4 h-4" />
+                          Manage Staff
+                        </Button>
+                      }
+                    />
+                    <DialogContent className="sm:max-w-[500px]">
+                      <DialogHeader>
+                        <DialogTitle>Staff Management</DialogTitle>
+                        <DialogDescription>Add or remove staff members managed in this dashboard.</DialogDescription>
+                      </DialogHeader>
+                      <div className="space-y-4 py-4">
+                        <div className="grid grid-cols-2 gap-4 border-b border-slate-100 pb-4">
+                          <div className="grid gap-2">
+                            <Label>Name</Label>
+                            <Input 
+                              value={newStaff.name} 
+                              onChange={e => setNewStaff({...newStaff, name: e.target.value})}
+                              placeholder="Full Name"
+                            />
+                          </div>
+                          <div className="grid gap-2">
+                            <Label>Location</Label>
+                            <Select 
+                              value={newStaff.location} 
+                              onValueChange={val => setNewStaff({...newStaff, location: val as Location})}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select location" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="Dorset Street">Dorset Street</SelectItem>
+                                <SelectItem value="Shelburne Road">Shelburne Road</SelectItem>
+                                <SelectItem value="West Palm Beach">West Palm Beach</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="grid gap-2 col-span-2">
+                            <Button onClick={handleCreateStaff} className="w-full bg-red-600 hover:bg-red-700">Add Staff Member</Button>
+                          </div>
+                        </div>
+                        <div className="max-h-[300px] overflow-y-auto space-y-2">
+                          <h4 className="text-sm font-semibold">Active Staff</h4>
+                          {staffMembers.map(staff => (
+                            <div key={staff.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                              <div>
+                                <p className="text-sm font-medium">{staff.name}</p>
+                                <p className="text-xs text-slate-500">{staff.location}</p>
+                              </div>
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className="text-slate-400 hover:text-red-600"
+                                onClick={() => handleRemoveStaff(staff.id)}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+
+                  <Dialog open={isNewVacationOpen} onOpenChange={(open) => {
+                    setIsNewVacationOpen(open);
+                    if (!open) {
+                      setEditingVacationId(null);
+                      setNewVacation({ 
+                        staffId: '', 
+                        startDate: new Date().toISOString().split('T')[0], 
+                        endDate: new Date().toISOString().split('T')[0], 
+                        type: 'vacation', 
+                        hours: 8,
+                        notes: '' 
+                      });
+                    }
+                  }}>
+                    <DialogTrigger
+                      render={
+                        <Button className="bg-red-600 hover:bg-red-700 gap-2">
+                          <Plus className="w-4 h-4" />
+                          Add Vacation
+                        </Button>
+                      }
+                    />
+                    <DialogContent className="sm:max-w-[425px]">
+                      <DialogHeader>
+                        <DialogTitle>{editingVacationId ? 'Edit Vacation Request' : 'Log Vacation Request'}</DialogTitle>
+                        <DialogDescription>
+                          {editingVacationId ? 'Modify the existing time-off request details.' : 'Submit a new time-off request for a staff member.'}
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
+                        <div className="grid gap-2">
+                          <Label>Staff Member</Label>
+                          <Select 
+                            value={newVacation.staffId} 
+                            onValueChange={val => setNewVacation({...newVacation, staffId: val})}
+                            disabled={!!editingVacationId}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select staff..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {staffMembers.map(s => (
+                                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="grid gap-2">
+                            <Label>Start Date</Label>
+                            <Input 
+                              type="date" 
+                              value={newVacation.startDate} 
+                              onChange={e => setNewVacation({...newVacation, startDate: e.target.value})}
+                            />
+                          </div>
+                          <div className="grid gap-2">
+                            <Label>End Date</Label>
+                            <Input 
+                              type="date" 
+                              value={newVacation.endDate} 
+                              onChange={e => setNewVacation({...newVacation, endDate: e.target.value})}
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="grid gap-2">
+                            <Label>Type</Label>
+                            <Select 
+                              value={newVacation.type} 
+                              onValueChange={val => setNewVacation({...newVacation, type: val as any})}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="vacation">Vacation</SelectItem>
+                                <SelectItem value="sick">Sick Leave</SelectItem>
+                                <SelectItem value="personal">Personal Leave</SelectItem>
+                                <SelectItem value="other">Other</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="grid gap-2">
+                            <Label>Hours Effected</Label>
+                            <Input 
+                              type="number"
+                              min="0"
+                              max="24"
+                              step="0.5"
+                              value={newVacation.hours} 
+                              onChange={e => setNewVacation({...newVacation, hours: parseFloat(e.target.value)})}
+                            />
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>Notes (Optional)</Label>
+                          <Textarea 
+                            placeholder="Add any specific details..." 
+                            value={newVacation.notes}
+                            onChange={e => setNewVacation({...newVacation, notes: e.target.value})}
+                          />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button onClick={handleCreateVacation} className="w-full bg-red-600 hover:bg-red-700">
+                          {editingVacationId ? 'Update Request' : 'Submit Request'}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </div>
+              </div>
+
+              <TabsContent value="calendar" className="mt-0">
+                  <Card className="border-slate-200 overflow-hidden bg-white shadow-md">
+                    <CardHeader className="flex flex-row items-center justify-between border-b border-slate-100 bg-slate-50/50 py-4">
+                      <div className="flex items-center gap-4">
+                        <Button variant="outline" size="sm" onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}>
+                          Prev
+                        </Button>
+                        <h4 className="text-lg font-bold text-slate-900 min-w-[150px] text-center">
+                          {format(currentMonth, 'MMMM yyyy')}
+                        </h4>
+                        <Button variant="outline" size="sm" onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}>
+                          Next
+                        </Button>
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => setCurrentMonth(new Date())} className="text-xs hover:text-red-600">
+                        Today
+                      </Button>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="grid grid-cols-7 border-b border-slate-100 bg-slate-50/30">
+                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                          <div key={day} className="py-3 text-center text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                            {day}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-7 border-l border-t border-slate-100 bg-white">
+                        {Array.from({ length: getDay(startOfMonth(currentMonth)) }).map((_, i) => (
+                          <div key={`empty-${i}`} className="h-32 border-r border-b border-slate-100 bg-slate-50/20" />
+                        ))}
+                        {eachDayOfInterval({
+                          start: startOfMonth(currentMonth),
+                          end: endOfMonth(currentMonth)
+                        }).map(day => {
+                          const dayVacations = getVacationsForDay(day);
+                          return (
+                            <div key={day.toString()} className={`h-32 border-r border-b border-slate-100 p-2 transition-colors hover:bg-slate-50/50 relative group ${isSameDay(day, new Date()) ? 'bg-red-50/30' : ''}`}>
+                              <span className={`text-xs font-bold ${isSameDay(day, new Date()) ? 'text-red-600' : 'text-slate-400'}`}>
+                                {format(day, 'd')}
+                              </span>
+                                <div className="mt-2 space-y-1">
+                                  {dayVacations.slice(0, 3).map(v => (
+                                    <div 
+                                      key={v.id} 
+                                      className={`text-[9px] px-1.5 py-0.5 rounded border truncate cursor-pointer transition-transform hover:scale-105 ${
+                                        v.status === 'approved' 
+                                          ? 'bg-green-50 text-green-700 border-green-100' 
+                                          : v.status === 'rejected'
+                                          ? 'bg-red-50 text-red-700 border-red-100'
+                                          : 'bg-amber-50 text-amber-700 border-amber-100'
+                                      }`}
+                                      title={`${v.staffName} (${v.type})${v.hours ? ` - ${v.hours}hrs` : ''}`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleEditVacation(v);
+                                      }}
+                                    >
+                                      {v.staffName} {v.hours && <span className="opacity-60 text-[8px]">({v.hours}h)</span>}
+                                    </div>
+                                  ))}
+                                {dayVacations.length > 3 && (
+                                  <div className="text-[9px] text-slate-400 font-medium pl-1 italic">
+                                    + {dayVacations.length - 3} more
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+
+                <TabsContent value="requests" className="mt-0">
+                  <Card className="border-slate-200">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-slate-50/50">
+                          <TableHead>Staff Member</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Period</TableHead>
+                          <TableHead>Days</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {vacations.map(vacation => (
+                          <TableRow key={vacation.id} className="hover:bg-slate-50/50 transition-colors">
+                            <TableCell className="font-bold text-slate-900">
+                              <div>
+                                {vacation.staffName}
+                                {vacation.hours && <p className="text-[10px] font-normal text-slate-400">{vacation.hours} hrs/day</p>}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className="capitalize text-[10px]">{vacation.type}</Badge>
+                            </TableCell>
+                            <TableCell className="text-xs text-slate-600 font-medium">
+                              {format(parseISO(vacation.startDate), 'MMM d')} - {format(parseISO(vacation.endDate), 'MMM d, yyyy')}
+                            </TableCell>
+                            <TableCell className="text-xs font-bold text-slate-500">{vacation.totalDays}d</TableCell>
+                            <TableCell>
+                              <Badge className={`capitalize text-[10px] ${
+                                vacation.status === 'approved' ? 'bg-green-50 text-green-700 border-green-200' :
+                                vacation.status === 'rejected' ? 'bg-red-50 text-red-700 border-red-200' :
+                                'bg-amber-50 text-amber-700 border-amber-200'
+                              }`}>
+                                {vacation.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-2">
+                                {user.role === 'admin' && (
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className="text-slate-400 hover:text-blue-600"
+                                    onClick={() => handleEditVacation(vacation)}
+                                  >
+                                    <Edit2 className="w-4 h-4" />
+                                  </Button>
+                                )}
+                                {user.role === 'admin' && vacation.status === 'pending' && (
+                                  <>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-green-600 hover:bg-green-50"
+                                      onClick={() => handleUpdateVacationStatus(vacation.id, 'approved')}
+                                    >
+                                      Approve
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-red-500 hover:bg-red-50"
+                                      onClick={() => handleUpdateVacationStatus(vacation.id, 'rejected')}
+                                    >
+                                      Reject
+                                    </Button>
+                                  </>
+                                )}
+                                {user.role === 'admin' && (
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className="text-slate-400 hover:text-red-600"
+                                    onClick={() => handleRemoveVacation(vacation.id)}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        {vacations.length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={6} className="text-center py-12 text-slate-400 italic text-sm">
+                              No vacation requests found.
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </Card>
+                </TabsContent>
+              </motion.div>
+            </Tabs>
           )}
         </AnimatePresence>
       </main>

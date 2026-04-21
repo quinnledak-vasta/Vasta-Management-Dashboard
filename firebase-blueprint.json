@@ -30,6 +30,33 @@
         "email": { "type": "string", "format": "email" },
         "role": { "type": "string", "enum": ["admin", "trainer"] }
       }
+    },
+    "StaffMember": {
+      "title": "Staff Member",
+      "description": "A managed staff member without app access",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "location": { "type": "string", "enum": ["Dorset Street", "Shelburne Road", "West Palm Beach"] },
+        "department": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["name", "location", "status"]
+    },
+    "VacationRequest": {
+      "title": "Vacation Request",
+      "description": "A vacation or time-off request for a staff member",
+      "type": "object",
+      "properties": {
+        "staffId": { "type": "string" },
+        "staffName": { "type": "string" },
+        "startDate": { "type": "string", "format": "date" },
+        "endDate": { "type": "string", "format": "date" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "type": { "type": "string", "enum": ["vacation", "sick", "personal", "other"] },
+        "hours": { "type": "number", "description": "Number of hours affected" }
+      },
+      "required": ["staffId", "startDate", "endDate", "status", "type"]
     }
   },
   "firestore": {
@@ -40,6 +67,14 @@
     "/users/{userId}": {
       "schema": "User",
       "description": "User profiles"
+    },
+    "/staff/{staffId}": {
+      "schema": "StaffMember",
+      "description": "Managed staff members"
+    },
+    "/vacations/{vacationId}": {
+      "schema": "VacationRequest",
+      "description": "Vacation and time-off requests"
     }
   }
 }

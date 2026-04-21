@@ -84,6 +84,18 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
+
+    // Staff collection (Managed entities)
+    match /staff/{staffId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Vacations collection
+    match /vacations/{vacationId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
     
     // Default deny for everything else
     match /{document=**} {

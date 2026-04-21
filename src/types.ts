@@ -62,3 +62,29 @@ export interface Invite {
   sentAt: string;
   status: 'pending' | 'accepted' | 'expired';
 }
+
+export type VacationStatus = 'pending' | 'approved' | 'rejected';
+export type Location = 'Dorset Street' | 'Shelburne Road' | 'West Palm Beach';
+
+export interface StaffMember {
+  id: string;
+  name: string;
+  location: Location;
+  department?: string;
+  startDate?: string;
+  status: 'active' | 'inactive';
+}
+
+export interface VacationRequest {
+  id: string;
+  staffId: string;
+  staffName: string;
+  startDate: string;
+  endDate: string;
+  status: VacationStatus;
+  type: 'vacation' | 'sick' | 'personal' | 'other';
+  hours?: number;
+  notes?: string;
+  createdAt: string;
+  totalDays: number;
+}
