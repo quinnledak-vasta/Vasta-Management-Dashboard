@@ -57,6 +57,21 @@
         "hours": { "type": "number", "description": "Number of hours affected" }
       },
       "required": ["staffId", "startDate", "endDate", "status", "type"]
+    },
+    "InventoryItem": {
+      "title": "Inventory Item",
+      "description": "An item in the physical inventory (equipment, retail, or staff)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["equipment", "retail-equipment", "retail-food-drink", "retail-apparel", "staff-apparel"] },
+        "location": { "type": "string", "enum": ["Dorset Street", "Shelburne Road", "West Palm Beach"] },
+        "quantity": { "type": "number" },
+        "price": { "type": "number" },
+        "productLink": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "category", "location", "quantity", "updatedAt"]
     }
   },
   "firestore": {
@@ -75,6 +90,10 @@
     "/vacations/{vacationId}": {
       "schema": "VacationRequest",
       "description": "Vacation and time-off requests"
+    },
+    "/inventory/{itemId}": {
+      "schema": "InventoryItem",
+      "description": "Physical inventory items"
     }
   }
 }

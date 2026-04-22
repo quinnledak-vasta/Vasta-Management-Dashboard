@@ -65,6 +65,7 @@ export interface Invite {
 
 export type VacationStatus = 'pending' | 'approved' | 'rejected';
 export type Location = 'Dorset Street' | 'Shelburne Road' | 'West Palm Beach';
+export type InventoryCategory = 'equipment' | 'retail-equipment' | 'retail-food-drink' | 'retail-apparel' | 'staff-apparel';
 
 export interface StaffMember {
   id: string;
@@ -87,4 +88,15 @@ export interface VacationRequest {
   notes?: string;
   createdAt: string;
   totalDays: number;
+}
+
+export interface InventoryItem {
+  id: string;
+  name: string;
+  category: InventoryCategory;
+  location: Location;
+  quantity: number;
+  price?: number;
+  productLink?: string;
+  updatedAt: string;
 }

@@ -27,6 +27,15 @@ import {
   Repeat,
   Trash2,
   Edit2,
+  Package,
+  ShoppingCart,
+  Link,
+  Tag,
+  Shirt,
+  Coffee,
+  Dumbbell,
+  ExternalLink,
+  MapPin
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
@@ -105,7 +114,9 @@ import {
   StaffMember,
   VacationRequest,
   VacationStatus,
-  Location
+  Location,
+  InventoryItem,
+  InventoryCategory
 } from './types';
 import { GoogleGenAI } from "@google/genai";
 
@@ -180,6 +191,7 @@ function AppContent() {
   const [invites, setInvites] = useState<Invite[]>([]);
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
   const [vacations, setVacations] = useState<VacationRequest[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
 
   // Fetch Tasks from Firestore
   useEffect(() => {
@@ -285,6 +297,23 @@ function AppContent() {
     return () => unsubscribe();
   }, [user]);
 
+  // Fetch Inventory from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const path = 'inventory';
+    const q = query(collection(db, path), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const inventoryList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as InventoryItem[];
+      setInventoryItems(inventoryList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
   const [activeTab, setActiveTab] = useState('tasks');
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [searchQuery, setSearchQuery] = useState('');
@@ -292,6 +321,7 @@ function AppContent() {
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [isNewStaffOpen, setIsNewStaffOpen] = useState(false);
   const [isNewVacationOpen, setIsNewVacationOpen] = useState(false);
+  const [isNewInventoryOpen, setIsNewInventoryOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [newQuestion, setNewQuestion] = useState('');
 
@@ -311,6 +341,16 @@ function AppContent() {
     notes: ''
   });
   const [editingVacationId, setEditingVacationId] = useState<string | null>(null);
+  const [newInventoryItem, setNewInventoryItem] = useState({
+    name: '',
+    category: 'equipment' as InventoryCategory,
+    location: 'Dorset Street' as Location,
+    quantity: 0,
+    price: 0,
+    productLink: ''
+  });
+  const [inventoryLocationFilter, setInventoryLocationFilter] = useState<Location | 'All'>('All');
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
   const selectedTask = useMemo(() => {
     return tasks.find(t => t.id === selectedTaskId) || null;
@@ -567,6 +607,69 @@ function AppContent() {
     }
   };
 
+  const handleCreateInventoryItem = async () => {
+    if (!newInventoryItem.name || !newInventoryItem.category) {
+      toast.error("Name and Category are required");
+      return;
+    }
+
+    try {
+      const itemData = {
+        ...newInventoryItem,
+        updatedAt: new Date().toISOString()
+      };
+
+      if (editingItemId) {
+        await updateDoc(doc(db, 'inventory', editingItemId), itemData);
+        toast.success("Inventory item updated");
+      } else {
+        await addDoc(collection(db, 'inventory'), itemData);
+        toast.success("Inventory item added");
+      }
+
+      setNewInventoryItem({ 
+        name: '', 
+        category: 'equipment', 
+        location: 'Dorset Street',
+        quantity: 0, 
+        price: 0, 
+        productLink: '' 
+      });
+      setIsNewInventoryOpen(false);
+      setEditingItemId(null);
+    } catch (error) {
+      handleFirestoreError(error, editingItemId ? OperationType.UPDATE : OperationType.CREATE, 'inventory');
+    }
+  };
+
+  const handleEditInventoryItem = (item: InventoryItem) => {
+    if (user?.role !== 'admin') {
+      toast.error("Only administrators can edit inventory.");
+      return;
+    }
+    setNewInventoryItem({
+      name: item.name,
+      category: item.category,
+      location: item.location,
+      quantity: item.quantity,
+      price: item.price || 0,
+      productLink: item.productLink || ''
+    });
+    setEditingItemId(item.id);
+    setIsNewInventoryOpen(true);
+  };
+
+  const handleRemoveInventoryItem = async (itemId: string) => {
+    if (!user || user.role !== 'admin') return;
+    if (!window.confirm("Are you sure you want to remove this item?")) return;
+    try {
+      await deleteDoc(doc(db, 'inventory', itemId));
+      toast.success("Inventory item removed");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `inventory/${itemId}`);
+    }
+  };
+
   const handleAddQuestion = async (taskId: string) => {
     if (!newQuestion.trim() || !user) return;
 
@@ -684,6 +787,13 @@ function AppContent() {
             <Umbrella className="w-5 h-5" />
             <span>Vacations</span>
           </button>
+          <button 
+            onClick={() => setActiveTab('inventory')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'inventory' ? 'bg-red-50 text-red-700 font-semibold' : 'text-slate-600 hover:bg-slate-50'}`}
+          >
+            <Package className="w-5 h-5" />
+            <span>Inventory</span>
+          </button>
         </nav>
 
         <div className="p-4 border-t border-slate-100">
@@ -710,99 +820,221 @@ function AppContent() {
             <h2 className="text-3xl font-bold tracking-tight">
               {activeTab === 'tasks' && 'Administrative Tasks'}
               {activeTab === 'team' && 'Team Management'}
+              {activeTab === 'inventory' && 'Inventory Management'}
             </h2>
             <p className="text-slate-500 mt-1">
               {activeTab === 'tasks' && 'Assign and track progress of team operations.'}
               {activeTab === 'team' && 'Manage trainers and their roles within the team.'}
+              {activeTab === 'inventory' && 'Track equipment, retail items, and staff supplies.'}
             </p>
           </div>
 
           <div className="flex gap-3">
-            <Dialog open={isNewTaskOpen} onOpenChange={setIsNewTaskOpen}>
-              <DialogTrigger
-                render={
-                  <Button className="bg-red-600 hover:bg-red-700 shadow-md shadow-red-100 gap-2">
-                    <Plus className="w-4 h-4" />
-                    New Task
-                  </Button>
-                }
-              />
-              <DialogContent className="sm:max-w-[500px]">
-                <DialogHeader>
-                  <DialogTitle>Assign New Task</DialogTitle>
-                  <DialogDescription>
-                    Fill in the details to assign a new administrative task to a team member.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-4 py-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="title">Task Title</Label>
-                    <Input 
-                      id="title" 
-                      placeholder="e.g. Inventory Audit" 
-                      value={newTask.title}
-                      onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="description">Description</Label>
-                    <Textarea 
-                      id="description" 
-                      placeholder="Provide details about the task..." 
-                      value={newTask.description}
-                      onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="assignedTo">Assign To</Label>
-                    <Select 
-                      value={newTask.assignedToId} 
-                      onValueChange={(val) => setNewTask({ ...newTask, assignedToId: val })}
-                    >
-                      <SelectTrigger id="assignedTo">
-                        <SelectValue placeholder="Select trainer" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {trainers.map(t => (
-                          <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
+            {activeTab === 'tasks' && (
+              <Dialog open={isNewTaskOpen} onOpenChange={setIsNewTaskOpen}>
+                <DialogTrigger
+                  render={
+                    <Button className="bg-red-600 hover:bg-red-700 shadow-md shadow-red-100 gap-2">
+                      <Plus className="w-4 h-4" />
+                      New Task
+                    </Button>
+                  }
+                />
+                <DialogContent className="sm:max-w-[500px]">
+                  <DialogHeader>
+                    <DialogTitle>Assign New Task</DialogTitle>
+                    <DialogDescription>
+                      Fill in the details to assign a new administrative task to a team member.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-4">
                     <div className="grid gap-2">
-                      <Label htmlFor="dueDate">Due Date</Label>
+                      <Label htmlFor="title">Task Title</Label>
                       <Input 
-                        id="dueDate" 
-                        type="date" 
-                        value={newTask.dueDate}
-                        onChange={(e) => setNewTask({ ...newTask, dueDate: e.target.value })}
+                        id="title" 
+                        placeholder="e.g. Inventory Audit" 
+                        value={newTask.title}
+                        onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label htmlFor="priority">Priority</Label>
+                      <Label htmlFor="description">Description</Label>
+                      <Textarea 
+                        id="description" 
+                        placeholder="Provide details about the task..." 
+                        value={newTask.description}
+                        onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="assignedTo">Assign To</Label>
                       <Select 
-                        value={newTask.priority} 
-                        onValueChange={(val) => setNewTask({ ...newTask, priority: val as Priority })}
+                        value={newTask.assignedToId} 
+                        onValueChange={(val) => setNewTask({ ...newTask, assignedToId: val })}
+                      >
+                        <SelectTrigger id="assignedTo">
+                          <SelectValue placeholder="Select trainer" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {trainers.map(t => (
+                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="dueDate">Due Date</Label>
+                        <Input 
+                          id="dueDate" 
+                          type="date" 
+                          value={newTask.dueDate}
+                          onChange={(e) => setNewTask({ ...newTask, dueDate: e.target.value })}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="priority">Priority</Label>
+                        <Select 
+                          value={newTask.priority} 
+                          onValueChange={(val) => setNewTask({ ...newTask, priority: val as Priority })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="low">Low</SelectItem>
+                            <SelectItem value="medium">Medium</SelectItem>
+                            <SelectItem value="high">High</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setIsNewTaskOpen(false)}>Cancel</Button>
+                    <Button onClick={handleCreateTask} className="bg-red-600 hover:bg-red-700">Assign Task</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+
+            {activeTab === 'inventory' && (
+              <Dialog open={isNewInventoryOpen} onOpenChange={(open) => {
+                setIsNewInventoryOpen(open);
+                if (!open) {
+                  setEditingItemId(null);
+                  setNewInventoryItem({ 
+                    name: '', 
+                    category: 'equipment', 
+                    location: 'Dorset Street',
+                    quantity: 0, 
+                    price: 0, 
+                    productLink: '' 
+                  });
+                }
+              }}>
+                <DialogTrigger
+                  render={
+                    <Button className="bg-red-600 hover:bg-red-700 shadow-md shadow-red-100 gap-2">
+                      <Plus className="w-4 h-4" />
+                      Add Item
+                    </Button>
+                  }
+                />
+                <DialogContent className="sm:max-w-[425px]">
+                  <DialogHeader>
+                    <DialogTitle>{editingItemId ? 'Edit Inventory Item' : 'Add Inventory Item'}</DialogTitle>
+                    <DialogDescription>
+                      {editingItemId ? 'Update details for this item.' : 'Add a new item to your facility inventory.'}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="item-name">Item Name</Label>
+                      <Input 
+                        id="item-name" 
+                        placeholder="e.g. Foam Roller, Protein Shake" 
+                        value={newInventoryItem.name}
+                        onChange={(e) => setNewInventoryItem({ ...newInventoryItem, name: e.target.value })}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Category</Label>
+                      <Select 
+                        value={newInventoryItem.category} 
+                        onValueChange={(val) => setNewInventoryItem({ ...newInventoryItem, category: val as InventoryCategory })}
                       >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="low">Low</SelectItem>
-                          <SelectItem value="medium">Medium</SelectItem>
-                          <SelectItem value="high">High</SelectItem>
+                          <SelectItem value="equipment">Equipment (Facility)</SelectItem>
+                          <SelectItem value="retail-equipment">Equipment (Sale)</SelectItem>
+                          <SelectItem value="retail-food-drink">Food & Drink (Sale)</SelectItem>
+                          <SelectItem value="retail-apparel">Apparel (Sale)</SelectItem>
+                          <SelectItem value="staff-apparel">Apparel (Staff)</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
+                    <div className="grid gap-2">
+                      <Label>Location</Label>
+                      <Select 
+                        value={newInventoryItem.location} 
+                        onValueChange={(val) => setNewInventoryItem({ ...newInventoryItem, location: val as Location })}
+                      >
+                        <SelectTrigger className="h-9">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Dorset Street">Dorset Street</SelectItem>
+                          <SelectItem value="Shelburne Road">Shelburne Road</SelectItem>
+                          <SelectItem value="West Palm Beach">West Palm Beach</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="item-quantity">Quantity</Label>
+                        <Input 
+                          id="item-quantity" 
+                          type="number" 
+                          min="0"
+                          value={newInventoryItem.quantity}
+                          onChange={(e) => setNewInventoryItem({ ...newInventoryItem, quantity: parseInt(e.target.value) || 0 })}
+                        />
+                      </div>
+                      {newInventoryItem.category !== 'equipment' && newInventoryItem.category !== 'staff-apparel' && (
+                        <div className="grid gap-2">
+                          <Label htmlFor="item-price">Sale Price ($)</Label>
+                          <Input 
+                            id="item-price" 
+                            type="number" 
+                            min="0"
+                            step="0.01"
+                            value={newInventoryItem.price}
+                            onChange={(e) => setNewInventoryItem({ ...newInventoryItem, price: parseFloat(e.target.value) || 0 })}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="item-link">Product Link</Label>
+                      <Input 
+                        id="item-link" 
+                        placeholder="https://example.com/product" 
+                        value={newInventoryItem.productLink}
+                        onChange={(e) => setNewInventoryItem({ ...newInventoryItem, productLink: e.target.value })}
+                      />
+                    </div>
                   </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsNewTaskOpen(false)}>Cancel</Button>
-                  <Button onClick={handleCreateTask} className="bg-red-600 hover:bg-red-700">Assign Task</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+                  <DialogFooter>
+                    <Button onClick={handleCreateInventoryItem} className="w-full bg-red-600 hover:bg-red-700">
+                      {editingItemId ? 'Update Item' : 'Add Item'}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
           </div>
         </header>
 
@@ -1488,6 +1720,149 @@ function AppContent() {
                     </Table>
                   </Card>
                 </TabsContent>
+              </motion.div>
+            </Tabs>
+          )}
+
+          {activeTab === 'inventory' && (
+            <Tabs defaultValue="equipment" className="w-full">
+              <motion.div 
+                key="inventory"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="flex-shrink-0 flex flex-col md:flex-row md:items-center gap-4">
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-900 leading-tight">Catalog & Stock</h3>
+                      <p className="text-[11px] text-slate-500">Manage facility supplies and retail items.</p>
+                    </div>
+                    <div className="h-8 w-[1px] bg-slate-200 hidden md:block" />
+                    <Select 
+                      value={inventoryLocationFilter} 
+                      onValueChange={(val) => setInventoryLocationFilter(val as Location | 'All')}
+                    >
+                      <SelectTrigger className="w-[160px] h-8 text-[11px] font-medium border-slate-200 gap-2">
+                        <MapPin className="w-3 h-3 text-red-600" />
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="All">All Locations</SelectItem>
+                        <SelectItem value="Dorset Street">Dorset Street</SelectItem>
+                        <SelectItem value="Shelburne Road">Shelburne Road</SelectItem>
+                        <SelectItem value="West Palm Beach">West Palm Beach</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <TabsList className="bg-slate-50 border border-slate-100 p-0.5 rounded-lg w-full md:w-auto overflow-x-auto flex-nowrap">
+                    <TabsTrigger value="equipment" className="rounded-md py-1 px-3 text-[10px] gap-1.5 h-7">
+                      <Dumbbell className="w-3 h-3" />
+                      Equipment
+                    </TabsTrigger>
+                    <TabsTrigger value="retail-equipment" className="rounded-md py-1 px-3 text-[10px] gap-1.5 h-7">
+                      <ShoppingCart className="w-3 h-3" />
+                      Equipment (Sale)
+                    </TabsTrigger>
+                    <TabsTrigger value="retail-food-drink" className="rounded-md py-1 px-3 text-[10px] gap-1.5 h-7">
+                      <Coffee className="w-3 h-3" />
+                      Food & Drink
+                    </TabsTrigger>
+                    <TabsTrigger value="retail-apparel" className="rounded-md py-1 px-3 text-[10px] gap-1.5 h-7">
+                      <Shirt className="w-3 h-3" />
+                      Retail Apparel
+                    </TabsTrigger>
+                    <TabsTrigger value="staff-apparel" className="rounded-md py-1 px-3 text-[10px] gap-1.5 h-7">
+                      <Tag className="w-3 h-3" />
+                      Staff Apparel
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+
+                {(['equipment', 'retail-equipment', 'retail-food-drink', 'retail-apparel', 'staff-apparel'] as InventoryCategory[]).map(category => (
+                  <TabsContent key={category} value={category} className="mt-0">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                      {inventoryItems.filter(item => 
+                        item.category === category && 
+                        (inventoryLocationFilter === 'All' || item.location === inventoryLocationFilter)
+                      ).map(item => (
+                        <Card key={item.id} className="group relative overflow-hidden border-slate-200 hover:shadow-md transition-all duration-200 bg-white">
+                          <CardHeader className="p-4 bg-slate-50/50 border-b border-slate-100">
+                            <div className="flex justify-between items-start gap-2">
+                              <div className="min-w-0">
+                                <CardTitle className="text-sm font-bold truncate text-slate-900">{item.name}</CardTitle>
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <MapPin className="w-2.5 h-2.5 text-slate-400" />
+                                  <span className="text-[9px] text-slate-500 font-medium">{item.location}</span>
+                                </div>
+                              </div>
+                              <div className="flex gap-1 absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  className="h-7 w-7 text-slate-400 hover:text-blue-600 hover:bg-blue-50"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleEditInventoryItem(item);
+                                  }}
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </Button>
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRemoveInventoryItem(item.id);
+                                  }}
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </Button>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="p-4 space-y-3">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="text-slate-500 font-medium">Stock Level</span>
+                              <Badge 
+                                variant={item.quantity > 5 ? 'secondary' : item.quantity > 0 ? 'outline' : 'destructive'}
+                                className="text-[10px] font-bold h-5"
+                              >
+                                {item.quantity} in stock
+                              </Badge>
+                            </div>
+                            {item.price !== undefined && item.price > 0 && item.category !== 'staff-apparel' && item.category !== 'equipment' && (
+                              <div className="flex justify-between items-center text-xs">
+                                <span className="text-slate-500 font-medium">Retail Price</span>
+                                <span className="font-bold text-slate-900">${item.price.toFixed(2)}</span>
+                              </div>
+                            )}
+                            {item.productLink && (
+                              <a 
+                                href={item.productLink} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 text-[10px] font-bold text-red-600 hover:text-red-700 transition-colors pt-1"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                Product Page
+                              </a>
+                            )}
+                          </CardContent>
+                        </Card>
+                      ))}
+                      {inventoryItems.filter(item => item.category === category).length === 0 && (
+                        <div className="col-span-full py-16 text-center bg-slate-50/30 rounded-3xl border-2 border-dashed border-slate-100">
+                          <Package className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+                          <p className="text-sm text-slate-400 italic">No {category.replace(/-/g, ' ')} items listed.</p>
+                        </div>
+                      )}
+                    </div>
+                  </TabsContent>
+                ))}
               </motion.div>
             </Tabs>
           )}
