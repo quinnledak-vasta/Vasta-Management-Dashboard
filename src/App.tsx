@@ -1289,7 +1289,7 @@ function AppContent() {
                 <div className="space-y-4">
                   <div>
                     <h3 className="text-xl font-bold text-slate-900">Pending Invitations</h3>
-                    <p className="text-sm text-slate-500">Sent invites that haven't been accepted yet.</p>
+                    <p className="text-sm text-slate-500">Invitations currently waiting for response.</p>
                   </div>
                   <Card className="border-slate-200">
                     <Table>

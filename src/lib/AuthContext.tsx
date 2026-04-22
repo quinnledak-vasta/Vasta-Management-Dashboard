@@ -6,7 +6,7 @@ import {
   signOut,
   User as FirebaseUser
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { toast } from 'sonner';
 
@@ -73,7 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(newUser);
           
           if (inviteDoc.exists()) {
-            await setDoc(doc(db, 'invites', firebaseUser.email!.toLowerCase()), { status: 'accepted' }, { merge: true });
+            await deleteDoc(doc(db, 'invites', firebaseUser.email!.toLowerCase()));
           }
         } else {
           // Not invited
