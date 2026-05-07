@@ -98,7 +98,9 @@ import {
   Timestamp,
   setDoc,
   getDocFromServer,
-  arrayUnion
+  arrayUnion,
+  where,
+  or
 } from 'firebase/firestore';
 import { 
   Task, 
@@ -197,7 +199,18 @@ function AppContent() {
   useEffect(() => {
     if (!user) return;
     const path = 'tasks';
-    const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+    
+    let q;
+    if (user.role === 'admin') {
+      q = query(collection(db, path), orderBy('createdAt', 'desc'));
+    } else {
+      q = query(
+        collection(db, path), 
+        or(where('assignedTo', '==', user.id), where('createdBy', '==', user.id)),
+        orderBy('createdAt', 'desc')
+      );
+    }
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const taskList = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -397,6 +410,7 @@ function AppContent() {
       dueDate: new Date(newTask.dueDate).toISOString(),
       createdAt: new Date().toISOString(),
       createdBy: user?.id || 'unknown',
+      createdByName: user?.name || user?.email || 'Unknown',
       isRecurring: false,
       recurrenceInterval: 'none',
       notes: [],
@@ -1127,7 +1141,12 @@ function AppContent() {
                                   <AvatarImage src={trainers.find(t => t.id === task.assignedTo)?.photoURL || `https://picsum.photos/seed/${task.assignedTo}/100/100`} />
                                   <AvatarFallback>{task.assignedToName[0]}</AvatarFallback>
                                 </Avatar>
-                                <span className="text-[11px] font-medium text-slate-600">{task.assignedToName}</span>
+                                <div className="flex flex-col">
+                                  <span className="text-[11px] font-medium text-slate-600 truncate max-w-[80px]">{task.assignedToName}</span>
+                                  {task.createdByName && (
+                                    <span className="text-[9px] text-slate-400">By: {task.createdByName}</span>
+                                  )}
+                                </div>
                               </div>
                               <div className="flex items-center gap-1 text-slate-400">
                                 <Clock className="w-3 h-3" />
@@ -1903,6 +1922,11 @@ function AppContent() {
                         <p className="text-sm font-bold">{selectedTask.assignedToName}</p>
                       </div>
                     </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h4 className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Assigned By</h4>
+                    <p className="text-sm font-medium text-slate-700">{selectedTask.createdByName || 'Unknown'}</p>
                   </div>
 
                   <div className="space-y-2">

@@ -76,9 +76,9 @@ service cloud.firestore {
 
     // Tasks collection
     match /tasks/{taskId} {
-      allow read: if isAuthenticated();
-      allow create: if isAdmin() && isValidTask(request.resource.data);
-      allow update: if (isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.assignedTo)) && isValidTask(request.resource.data);
+      allow read: if isAdmin() || (isAuthenticated() && (request.auth.uid == resource.data.assignedTo || request.auth.uid == resource.data.createdBy));
+      allow create: if isAdmin() && isValidTask(request.resource.data) && request.auth.uid == request.resource.data.createdBy;
+      allow update: if (isAdmin() || (isAuthenticated() && (request.auth.uid == resource.data.assignedTo || request.auth.uid == resource.data.createdBy))) && isValidTask(request.resource.data);
       allow delete: if isAdmin();
     }
 

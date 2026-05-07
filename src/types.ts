@@ -30,6 +30,7 @@ export interface Task {
   dueDate: string;
   createdAt: string;
   createdBy: string;
+  createdByName: string;
   isRecurring: boolean;
   recurrenceInterval: RecurrenceInterval;
   notes?: TaskNote[];

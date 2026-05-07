@@ -14,6 +14,7 @@
         "dueDate": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "createdBy": { "type": "string" },
+        "createdByName": { "type": "string" },
         "isRecurring": { "type": "boolean" },
         "recurrenceInterval": { "type": "string", "enum": ["daily", "weekly", "monthly", "none"] },
         "notes": { "type": "array" },
