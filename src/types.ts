@@ -91,6 +91,22 @@ export interface VacationRequest {
   totalDays: number;
 }
 
+export interface InventoryReportItem {
+  itemId: string;
+  itemName: string;
+  quantity: number;
+}
+
+export interface InventoryReport {
+  id: string;
+  location: Location;
+  reportedBy: string;
+  reportedByName: string;
+  reportedAt: string;
+  items: InventoryReportItem[];
+  notes?: string;
+}
+
 export interface InventoryItem {
   id: string;
   name: string;

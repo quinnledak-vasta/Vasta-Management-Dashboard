@@ -56,9 +56,17 @@ service cloud.firestore {
              data.category in ['equipment', 'retail-equipment', 'retail-food-drink', 'retail-apparel', 'staff-apparel'] &&
              data.location in ['Dorset Street', 'Shelburne Road', 'West Palm Beach'] &&
              data.quantity is number &&
-             data.price is number &&
+             (data.price == null || data.price is number) &&
              data.updatedAt is string &&
              (data.productLink == null || data.productLink is string);
+    }
+
+    function isValidInventoryReport(data) {
+      return data.location in ['Dorset Street', 'Shelburne Road', 'West Palm Beach'] &&
+             data.reportedBy is string &&
+             data.reportedByName is string &&
+             data.reportedAt is string &&
+             data.items is list;
     }
 
     // ===============================================================
@@ -110,7 +118,15 @@ service cloud.firestore {
     // Inventory collection
     match /inventory/{itemId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin() && isValidInventoryItem(request.resource.data);
+      allow create, delete: if isAdmin();
+      allow update: if isAuthenticated() && isValidInventoryItem(request.resource.data);
+    }
+    
+    // Inventory Reports collection
+    match /inventoryReports/{reportId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidInventoryReport(request.resource.data);
+      allow delete: if isAdmin();
     }
     
     // Default deny for everything else

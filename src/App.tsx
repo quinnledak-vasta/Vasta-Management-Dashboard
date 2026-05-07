@@ -22,6 +22,7 @@ import {
   Send,
   Sparkles,
   ChevronRight,
+  ClipboardCheck,
   LogOut,
   UserPlus,
   Repeat,
@@ -100,7 +101,8 @@ import {
   getDocFromServer,
   arrayUnion,
   where,
-  or
+  or,
+  writeBatch
 } from 'firebase/firestore';
 import { 
   Task, 
@@ -118,7 +120,9 @@ import {
   VacationStatus,
   Location,
   InventoryItem,
-  InventoryCategory
+  InventoryCategory,
+  InventoryReport,
+  InventoryReportItem
 } from './types';
 import { GoogleGenAI } from "@google/genai";
 
@@ -331,10 +335,28 @@ function AppContent() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'inventoryReports'), orderBy('reportedAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const reports = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as InventoryReport[];
+      setInventoryReports(reports);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [isNewStaffOpen, setIsNewStaffOpen] = useState(false);
   const [isNewVacationOpen, setIsNewVacationOpen] = useState(false);
   const [isNewInventoryOpen, setIsNewInventoryOpen] = useState(false);
+  const [isInventoryReportOpen, setIsInventoryReportOpen] = useState(false);
+  const [inventoryReports, setInventoryReports] = useState<InventoryReport[]>([]);
+  const [selectedReportLocation, setSelectedReportLocation] = useState<Location | ''>('');
+  const [reportItemCounts, setReportItemCounts] = useState<Record<string, number>>({});
+  const [reportNotes, setReportNotes] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [newQuestion, setNewQuestion] = useState('');
 
@@ -684,6 +706,63 @@ function AppContent() {
     }
   };
 
+  const handleSubmitInventoryReport = async () => {
+    if (!user || !selectedReportLocation) {
+      toast.error("Please select a location");
+      return;
+    }
+
+    const itemsToRecord: InventoryReportItem[] = inventoryItems
+      .filter(item => item.location === selectedReportLocation)
+      .map(item => ({
+        itemId: item.id,
+        itemName: item.name,
+        quantity: reportItemCounts[item.id] ?? item.quantity
+      }));
+
+    if (itemsToRecord.length === 0) {
+      toast.error("No items found for this location");
+      return;
+    }
+
+    try {
+      const batch = writeBatch(db);
+      
+      // 1. Create the report
+      const reportId = crypto.randomUUID();
+      const reportRef = doc(db, 'inventoryReports', reportId);
+      const reportData: InventoryReport = {
+        id: reportId,
+        location: selectedReportLocation as Location,
+        reportedBy: user.id,
+        reportedByName: user.name,
+        reportedAt: new Date().toISOString(),
+        items: itemsToRecord,
+        notes: reportNotes
+      };
+      batch.set(reportRef, reportData);
+
+      // 2. Update master inventory quantities
+      itemsToRecord.forEach(reportItem => {
+        const itemRef = doc(db, 'inventory', reportItem.itemId);
+        batch.update(itemRef, {
+          quantity: reportItem.quantity,
+          updatedAt: new Date().toISOString()
+        });
+      });
+
+      await batch.commit();
+      
+      toast.success("Inventory report submitted and stock levels updated");
+      setIsInventoryReportOpen(false);
+      setSelectedReportLocation('');
+      setReportItemCounts({});
+      setReportNotes('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'inventoryReports');
+    }
+  };
+
   const handleAddQuestion = async (taskId: string) => {
     if (!newQuestion.trim() || !user) return;
 
@@ -933,7 +1012,17 @@ function AppContent() {
             )}
 
             {activeTab === 'inventory' && (
-              <Dialog open={isNewInventoryOpen} onOpenChange={(open) => {
+              <div className="flex gap-2">
+                <Button 
+                  onClick={() => setIsInventoryReportOpen(true)}
+                  variant="outline"
+                  className="gap-2 border-slate-200 hover:bg-slate-50"
+                >
+                  <ClipboardCheck className="w-4 h-4 text-red-600" />
+                  Audit Inventory
+                </Button>
+
+                <Dialog open={isNewInventoryOpen} onOpenChange={(open) => {
                 setIsNewInventoryOpen(open);
                 if (!open) {
                   setEditingItemId(null);
@@ -1048,7 +1137,101 @@ function AppContent() {
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+              </div>
             )}
+
+            {/* Inventory Report Dialog */}
+            <Dialog open={isInventoryReportOpen} onOpenChange={setIsInventoryReportOpen}>
+              <DialogContent className="sm:max-w-[600px] max-h-[85vh] flex flex-col">
+                <DialogHeader>
+                  <DialogTitle>Inventory Audit Report</DialogTitle>
+                  <DialogDescription>
+                    Select a location to record current stock levels for all items.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-6 py-4 flex-1 overflow-y-auto">
+                  <div className="grid gap-2">
+                    <Label htmlFor="report-location">Location</Label>
+                    <Select 
+                      value={selectedReportLocation} 
+                      onValueChange={(val) => {
+                        setSelectedReportLocation(val as Location);
+                        setReportItemCounts({});
+                      }}
+                    >
+                      <SelectTrigger id="report-location" className="w-full">
+                        <SelectValue placeholder="Select Location" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Dorset Street">Dorset Street</SelectItem>
+                        <SelectItem value="Shelburne Road">Shelburne Road</SelectItem>
+                        <SelectItem value="West Palm Beach">West Palm Beach</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {selectedReportLocation && (
+                    <div className="space-y-4">
+                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Items at {selectedReportLocation}</h4>
+                        <div className="space-y-3">
+                          {inventoryItems
+                            .filter(item => item.location === selectedReportLocation)
+                            .map(item => (
+                              <div key={item.id} className="flex items-center justify-between gap-4 p-2 bg-white rounded-md border border-slate-100 shadow-sm">
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-medium text-slate-900 truncate">{item.name}</p>
+                                  <p className="text-[10px] text-slate-500 uppercase">{item.category.replace('-', ' ')}</p>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <div className="text-right">
+                                    <p className="text-[10px] text-slate-400 font-medium leading-none mb-1">Current: {item.quantity}</p>
+                                    <Input
+                                      type="number"
+                                      value={reportItemCounts[item.id] ?? item.quantity}
+                                      onChange={(e) => setReportItemCounts({ 
+                                        ...reportItemCounts, 
+                                        [item.id]: parseInt(e.target.value) || 0 
+                                      })}
+                                      className="w-20 h-8 text-sm"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            ))
+                          }
+                          {inventoryItems.filter(item => item.location === selectedReportLocation).length === 0 && (
+                            <p className="text-sm text-slate-500 italic text-center py-4">No items listed for this location.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label htmlFor="audit-notes">Audit Notes</Label>
+                        <Input 
+                          id="audit-notes"
+                          placeholder="Any discrepancies or notes about this audit..."
+                          value={reportNotes}
+                          onChange={(e) => setReportNotes(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <DialogFooter className="mt-4">
+                  <Button variant="outline" onClick={() => setIsInventoryReportOpen(false)}>Cancel</Button>
+                  <Button 
+                    onClick={handleSubmitInventoryReport}
+                    disabled={!selectedReportLocation}
+                    className="bg-red-600 hover:bg-red-700"
+                  >
+                    Submit Audit Report
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
         </header>
 
@@ -1797,6 +1980,10 @@ function AppContent() {
                       <Tag className="w-3 h-3" />
                       Staff Apparel
                     </TabsTrigger>
+                    <TabsTrigger value="history" className="rounded-md py-1 px-3 text-[10px] gap-1.5 h-7">
+                      <Clock className="w-3 h-3" />
+                      Audit History
+                    </TabsTrigger>
                   </TabsList>
                 </div>
 
@@ -1882,6 +2069,49 @@ function AppContent() {
                     </div>
                   </TabsContent>
                 ))}
+
+                <TabsContent value="history" className="mt-0">
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <Table>
+                      <TableHeader className="bg-slate-50">
+                        <TableRow>
+                          <TableHead className="text-[10px] uppercase font-bold text-slate-500">Date</TableHead>
+                          <TableHead className="text-[10px] uppercase font-bold text-slate-500">Location</TableHead>
+                          <TableHead className="text-[10px] uppercase font-bold text-slate-500">Reported By</TableHead>
+                          <TableHead className="text-[10px] uppercase font-bold text-slate-500">Items Counted</TableHead>
+                          <TableHead className="text-[10px] uppercase font-bold text-slate-500">Notes</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {inventoryReports
+                          .filter(report => inventoryLocationFilter === 'All' || report.location === inventoryLocationFilter)
+                          .map((report) => (
+                          <TableRow key={report.id} className="hover:bg-slate-50/50">
+                            <TableCell className="text-xs font-semibold text-slate-700">
+                              {format(parseISO(report.reportedAt), 'MMM d, yyyy HH:mm')}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1.5">
+                                <MapPin className="w-3 h-3 text-red-600" />
+                                <span className="text-xs font-medium text-slate-600">{report.location}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-xs text-slate-600">{report.reportedByName}</TableCell>
+                            <TableCell className="text-xs font-bold text-slate-900">{report.items.length} items</TableCell>
+                            <TableCell className="text-xs text-slate-400 italic max-w-[200px] truncate">{report.notes || 'No notes'}</TableCell>
+                          </TableRow>
+                        ))}
+                        {inventoryReports.length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={5} className="py-12 text-center text-slate-400 h-24">
+                              No inventory reports found.
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </TabsContent>
               </motion.div>
             </Tabs>
           )}

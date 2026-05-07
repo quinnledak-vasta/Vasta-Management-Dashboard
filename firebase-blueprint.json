@@ -73,6 +73,20 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "category", "location", "quantity", "updatedAt"]
+    },
+    "InventoryReport": {
+      "title": "Inventory Report",
+      "description": "A snapshot report of inventory levels at a specific location",
+      "type": "object",
+      "properties": {
+        "location": { "type": "string", "enum": ["Dorset Street", "Shelburne Road", "West Palm Beach"] },
+        "reportedBy": { "type": "string" },
+        "reportedByName": { "type": "string" },
+        "reportedAt": { "type": "string", "format": "date-time" },
+        "items": { "type": "array" },
+        "notes": { "type": "string" }
+      },
+      "required": ["location", "reportedBy", "reportedAt", "items"]
     }
   },
   "firestore": {
@@ -95,6 +109,10 @@
     "/inventory/{itemId}": {
       "schema": "InventoryItem",
       "description": "Physical inventory items"
+    },
+    "/inventoryReports/{reportId}": {
+      "schema": "InventoryReport",
+      "description": "Inventory count reports"
     }
   }
 }
