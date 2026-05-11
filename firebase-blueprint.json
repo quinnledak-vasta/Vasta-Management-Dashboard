@@ -87,6 +87,23 @@
         "notes": { "type": "string" }
       },
       "required": ["location", "reportedBy", "reportedAt", "items"]
+    },
+    "Mail": {
+      "title": "Mail",
+      "description": "Trigger Email extension collection",
+      "type": "object",
+      "properties": {
+        "to": { "type": "string" },
+        "message": {
+          "type": "object",
+          "properties": {
+            "subject": { "type": "string" },
+            "text": { "type": "string" },
+            "html": { "type": "string" }
+          }
+        }
+      },
+      "required": ["to", "message"]
     }
   },
   "firestore": {
@@ -113,6 +130,10 @@
     "/inventoryReports/{reportId}": {
       "schema": "InventoryReport",
       "description": "Inventory count reports"
+    },
+    "/mail/{mailId}": {
+      "schema": "Mail",
+      "description": "Email trigger requests"
     }
   }
 }

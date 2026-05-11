@@ -301,6 +301,13 @@ function AppContent() {
   useEffect(() => {
     if (!user) return;
     const path = 'vacations';
+    
+    // Only admins can see the vacations list
+    if (user.role !== 'admin') {
+      setVacations([]);
+      return;
+    }
+
     const q = query(collection(db, path), orderBy('startDate', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const vacationList = snapshot.docs.map(doc => ({
@@ -337,13 +344,16 @@ function AppContent() {
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'inventoryReports'), orderBy('reportedAt', 'desc'));
+    const path = 'inventoryReports';
+    const q = query(collection(db, path), orderBy('reportedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const reports = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as InventoryReport[];
       setInventoryReports(reports);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
   }, [user]);
@@ -440,7 +450,39 @@ function AppContent() {
     };
 
     try {
-      await addDoc(collection(db, 'tasks'), taskData);
+      const taskRef = await addDoc(collection(db, 'tasks'), taskData);
+      
+      // Send email notification if trainer email is available
+      if (trainer?.email) {
+        try {
+          await addDoc(collection(db, 'mail'), {
+            to: trainer.email,
+            message: {
+              subject: `New Task Assigned: ${taskData.title}`,
+              html: `
+                <div style="font-family: sans-serif; padding: 20px; color: #333;">
+                  <h2 style="color: #ef4444;">New Task Assigned</h2>
+                  <p>Hi <strong>${trainer.name}</strong>,</p>
+                  <p>A new task has been assigned to you by <strong>${taskData.createdByName}</strong>.</p>
+                  <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                    <h3 style="margin-top: 0;">${taskData.title}</h3>
+                    <p>${taskData.description || 'No description provided.'}</p>
+                    <p><strong>Priority:</strong> ${taskData.priority.charAt(0).toUpperCase() + taskData.priority.slice(1)}</p>
+                    <p><strong>Due Date:</strong> ${new Date(taskData.dueDate).toLocaleDateString()}</p>
+                  </div>
+                  <p>Please log in to the dashboard to view more details.</p>
+                  <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                  <p style="font-size: 12px; color: #94a3b8;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                </div>
+              `
+            }
+          });
+        } catch (emailError) {
+          console.error("Failed to queue notification email:", emailError);
+          // Don't toast error for email failure, the task was created successfully
+        }
+      }
+
       setIsNewTaskOpen(false);
       setNewTask({
         title: '',

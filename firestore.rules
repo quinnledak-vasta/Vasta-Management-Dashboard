@@ -69,6 +69,13 @@ service cloud.firestore {
              data.items is list;
     }
 
+    function isValidMail(data) {
+      return (data.to is string || data.to is list) &&
+             data.message is map &&
+             data.message.subject is string &&
+             (data.message.html is string || data.message.text is string);
+    }
+
     // ===============================================================
     // Routes
     // ===============================================================
@@ -76,7 +83,7 @@ service cloud.firestore {
     // Users collection
     match /users/{userId} {
       allow get: if isAuthenticated();
-      allow list: if isAdmin();
+      allow list: if isAuthenticated();
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
       allow update: if (isOwner(userId) && isValidUser(request.resource.data)) || isAdmin();
       allow delete: if isAdmin();
@@ -111,8 +118,9 @@ service cloud.firestore {
 
     // Vacations collection
     match /vacations/{vacationId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
     }
 
     // Inventory collection
@@ -127,6 +135,12 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidInventoryReport(request.resource.data);
       allow delete: if isAdmin();
+    }
+    
+    // Mail collection (Trigger Email extension)
+    match /mail/{mailId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && isValidMail(request.resource.data);
     }
     
     // Default deny for everything else

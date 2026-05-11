@@ -3,6 +3,23 @@ export type Priority = 'low' | 'medium' | 'high';
 export type UserRole = 'admin' | 'trainer';
 export type RecurrenceInterval = 'daily' | 'weekly' | 'monthly' | 'none';
 
+export interface Mail {
+  to: string | string[];
+  message: {
+    subject: string;
+    text?: string;
+    html?: string;
+  };
+  delivery?: {
+    attempts: number;
+    endTime?: string;
+    error?: string;
+    leaseExpireTime?: string;
+    startTime?: string;
+    state: 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'ERROR';
+  };
+}
+
 export interface TaskNote {
   id: string;
   text: string;
