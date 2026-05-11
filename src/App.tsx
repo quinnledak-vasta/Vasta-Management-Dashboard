@@ -509,6 +509,19 @@ function AppContent() {
     }
   };
 
+  const handleDeleteTask = async (taskId: string) => {
+    if (!window.confirm("Are you sure you want to delete this task?")) return;
+    try {
+      await deleteDoc(doc(db, 'tasks', taskId));
+      toast.success("Task deleted successfully");
+      if (selectedTaskId === taskId) {
+        setSelectedTaskId(null);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `tasks/${taskId}`);
+    }
+  };
+
   const handleSendInvite = async () => {
     if (!user || user.role !== 'admin' || !newInvite.email) {
       toast.error("Admin permissions and email required");
@@ -1356,6 +1369,18 @@ function AppContent() {
                                     <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleUpdateTaskStatus(task.id, 'in-progress'); }}>In Progress</DropdownMenuItem>
                                     <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleUpdateTaskStatus(task.id, 'completed'); }}>Completed</DropdownMenuItem>
                                   </DropdownMenuGroup>
+                                  {(user?.role === 'admin' || task.createdBy === user?.id) && (
+                                    <>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem 
+                                        className="text-red-600 focus:text-red-600 focus:bg-red-50" 
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
+                                      >
+                                        <Trash2 className="w-4 h-4 mr-2" />
+                                        Delete Task
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             </div>
@@ -2311,7 +2336,20 @@ function AppContent() {
               </div>
 
               <DialogFooter className="sm:justify-between items-center">
-                <p className="text-[10px] text-slate-400">Created {format(new Date(selectedTask.createdAt), 'MMM d, yyyy')}</p>
+                <div className="flex items-center gap-4">
+                  <p className="text-[10px] text-slate-400">Created {format(new Date(selectedTask.createdAt), 'MMM d, yyyy')}</p>
+                  {(user?.role === 'admin' || selectedTask.createdBy === user?.id) && (
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 h-7 text-[10px] gap-1"
+                      onClick={() => handleDeleteTask(selectedTask.id)}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Delete Task
+                    </Button>
+                  )}
+                </div>
                 <Button variant="outline" onClick={() => setSelectedTaskId(null)}>Close</Button>
               </DialogFooter>
             </>
