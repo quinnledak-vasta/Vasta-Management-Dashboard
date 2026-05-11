@@ -12,11 +12,18 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function isAdmin() {
+    function isEmailAdmin() {
+      return isAuthenticated() && request.auth.token.email == 'quinnledak@vastasports.com';
+    }
+
+    function isRoleAdmin() {
       return isAuthenticated() && 
-        (request.auth.token.email == 'quinnledak@vastasports.com' || 
-         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isAdmin() {
+      return isEmailAdmin() || isRoleAdmin();
     }
 
     // ===============================================================

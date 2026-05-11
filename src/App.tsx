@@ -198,6 +198,64 @@ function AppContent() {
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
   const [vacations, setVacations] = useState<VacationRequest[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [inventoryReports, setInventoryReports] = useState<InventoryReport[]>([]);
+  
+  const [activeTab, setActiveTab] = useState('tasks');
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
+  const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [isNewStaffOpen, setIsNewStaffOpen] = useState(false);
+  const [isNewVacationOpen, setIsNewVacationOpen] = useState(false);
+  const [isNewInventoryOpen, setIsNewInventoryOpen] = useState(false);
+  const [isInventoryReportOpen, setIsInventoryReportOpen] = useState(false);
+  
+  const [selectedReportLocation, setSelectedReportLocation] = useState<Location | ''>('');
+  const [reportItemCounts, setReportItemCounts] = useState<Record<string, number>>({});
+  const [reportNotes, setReportNotes] = useState('');
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [newQuestion, setNewQuestion] = useState('');
+
+  const [newStaff, setNewStaff] = useState({
+    name: '',
+    location: 'Dorset Street' as Location,
+    department: '',
+    status: 'active' as const
+  });
+
+  const [newVacation, setNewVacation] = useState({
+    staffId: '',
+    startDate: new Date().toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0],
+    type: 'vacation' as const,
+    hours: 8,
+    notes: ''
+  });
+  const [editingVacationId, setEditingVacationId] = useState<string | null>(null);
+
+  const [newInventoryItem, setNewInventoryItem] = useState({
+    name: '',
+    category: 'equipment' as InventoryCategory,
+    location: 'Dorset Street' as Location,
+    quantity: 0,
+    price: 0,
+    productLink: ''
+  });
+  const [inventoryLocationFilter, setInventoryLocationFilter] = useState<Location | 'All'>('All');
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+
+  const [newTask, setNewTask] = useState({
+    title: '',
+    description: '',
+    assignedToId: '',
+    priority: 'medium' as Priority,
+    dueDate: new Date().toISOString().split('T')[0],
+  });
+
+  const [newInvite, setNewInvite] = useState<Partial<Invite>>({
+    email: '',
+    role: 'trainer',
+  });
 
   // Fetch Tasks from Firestore
   useEffect(() => {
@@ -338,10 +396,8 @@ function AppContent() {
     return () => unsubscribe();
   }, [user]);
 
-  const [activeTab, setActiveTab] = useState('tasks');
-  const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
+
+  // Fetch Inventory Reports from Firestore
   useEffect(() => {
     if (!user) return;
     const path = 'inventoryReports';
@@ -358,63 +414,10 @@ function AppContent() {
     return () => unsubscribe();
   }, [user]);
 
-  const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [isNewStaffOpen, setIsNewStaffOpen] = useState(false);
-  const [isNewVacationOpen, setIsNewVacationOpen] = useState(false);
-  const [isNewInventoryOpen, setIsNewInventoryOpen] = useState(false);
-  const [isInventoryReportOpen, setIsInventoryReportOpen] = useState(false);
-  const [inventoryReports, setInventoryReports] = useState<InventoryReport[]>([]);
-  const [selectedReportLocation, setSelectedReportLocation] = useState<Location | ''>('');
-  const [reportItemCounts, setReportItemCounts] = useState<Record<string, number>>({});
-  const [reportNotes, setReportNotes] = useState('');
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [newQuestion, setNewQuestion] = useState('');
-
-  const [newStaff, setNewStaff] = useState({
-    name: '',
-    location: 'Dorset Street' as Location,
-    department: '',
-    status: 'active' as const
-  });
-
-  const [newVacation, setNewVacation] = useState({
-    staffId: '',
-    startDate: new Date().toISOString().split('T')[0],
-    endDate: new Date().toISOString().split('T')[0],
-    type: 'vacation' as const,
-    hours: 8,
-    notes: ''
-  });
-  const [editingVacationId, setEditingVacationId] = useState<string | null>(null);
-  const [newInventoryItem, setNewInventoryItem] = useState({
-    name: '',
-    category: 'equipment' as InventoryCategory,
-    location: 'Dorset Street' as Location,
-    quantity: 0,
-    price: 0,
-    productLink: ''
-  });
-  const [inventoryLocationFilter, setInventoryLocationFilter] = useState<Location | 'All'>('All');
-  const [editingItemId, setEditingItemId] = useState<string | null>(null);
-
   const selectedTask = useMemo(() => {
     return tasks.find(t => t.id === selectedTaskId) || null;
   }, [tasks, selectedTaskId]);
 
-  // Simple New Task Form State
-  const [newTask, setNewTask] = useState({
-    title: '',
-    description: '',
-    assignedToId: '',
-    priority: 'medium' as Priority,
-    dueDate: new Date().toISOString().split('T')[0],
-  });
-
-  // New Invite Form State
-  const [newInvite, setNewInvite] = useState<Partial<Invite>>({
-    email: '',
-    role: 'trainer',
-  });
 
   // Filtered Tasks
   const filteredTasks = useMemo(() => {
