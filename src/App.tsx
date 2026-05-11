@@ -262,16 +262,11 @@ function AppContent() {
     if (!user) return;
     const path = 'tasks';
     
-    let q;
-    if (user.role === 'admin') {
-      q = query(collection(db, path), orderBy('createdAt', 'desc'));
-    } else {
-      q = query(
-        collection(db, path), 
-        or(where('assignedTo', '==', user.id), where('createdBy', '==', user.id)),
-        orderBy('createdAt', 'desc')
-      );
-    }
+    const q = query(
+      collection(db, path), 
+      or(where('assignedTo', '==', user.id), where('createdBy', '==', user.id)),
+      orderBy('createdAt', 'desc')
+    );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const taskList = snapshot.docs.map(doc => ({
