@@ -104,6 +104,19 @@
         }
       },
       "required": ["to", "message"]
+    },
+    "Resource": {
+      "title": "Resource",
+      "description": "A frequently used document or link",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "url": { "type": "string", "format": "uri" },
+        "category": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["title", "url", "createdAt", "createdBy"]
     }
   },
   "firestore": {
@@ -134,6 +147,10 @@
     "/mail/{mailId}": {
       "schema": "Mail",
       "description": "Email trigger requests"
+    },
+    "/resources/{resourceId}": {
+      "schema": "Resource",
+      "description": "Frequently used links and documents"
     }
   }
 }

@@ -134,3 +134,12 @@ export interface InventoryItem {
   productLink?: string;
   updatedAt: string;
 }
+
+export interface Resource {
+  id: string;
+  title: string;
+  url: string;
+  category?: string;
+  createdAt: string;
+  createdBy: string;
+}

@@ -36,7 +36,8 @@ import {
   Coffee,
   Dumbbell,
   ExternalLink,
-  MapPin
+  MapPin,
+  FileText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
@@ -122,7 +123,8 @@ import {
   InventoryItem,
   InventoryCategory,
   InventoryReport,
-  InventoryReportItem
+  InventoryReportItem,
+  Resource
 } from './types';
 import { GoogleGenAI } from "@google/genai";
 
@@ -199,6 +201,7 @@ function AppContent() {
   const [vacations, setVacations] = useState<VacationRequest[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [inventoryReports, setInventoryReports] = useState<InventoryReport[]>([]);
+  const [resources, setResources] = useState<Resource[]>([]);
   
   const [activeTab, setActiveTab] = useState('tasks');
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -209,6 +212,7 @@ function AppContent() {
   const [isNewVacationOpen, setIsNewVacationOpen] = useState(false);
   const [isNewInventoryOpen, setIsNewInventoryOpen] = useState(false);
   const [isInventoryReportOpen, setIsInventoryReportOpen] = useState(false);
+  const [isNewResourceOpen, setIsNewResourceOpen] = useState(false);
   
   const [selectedReportLocation, setSelectedReportLocation] = useState<Location | ''>('');
   const [reportItemCounts, setReportItemCounts] = useState<Record<string, number>>({});
@@ -255,6 +259,12 @@ function AppContent() {
   const [newInvite, setNewInvite] = useState<Partial<Invite>>({
     email: '',
     role: 'trainer',
+  });
+
+  const [newResource, setNewResource] = useState({
+    title: '',
+    url: '',
+    category: ''
   });
 
   // Fetch Tasks from Firestore
@@ -403,6 +413,24 @@ function AppContent() {
         ...doc.data()
       })) as InventoryReport[];
       setInventoryReports(reports);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Resources from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const path = 'resources';
+    const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const resourceList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Resource[];
+      setResources(resourceList);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, path);
     });
@@ -575,6 +603,42 @@ function AppContent() {
     }
   };
 
+  const handleCreateResource = async () => {
+    if (!user || user.role !== 'admin') return;
+    if (!newResource.title || !newResource.url) {
+      toast.error("Please provide both a title and a URL");
+      return;
+    }
+
+    try {
+      const resourceData: Omit<Resource, 'id'> = {
+        title: newResource.title,
+        url: newResource.url.startsWith('http') ? newResource.url : `https://${newResource.url}`,
+        category: newResource.category || 'General',
+        createdAt: new Date().toISOString(),
+        createdBy: user.id
+      };
+      await addDoc(collection(db, 'resources'), resourceData);
+      setNewResource({ title: '', url: '', category: '' });
+      setIsNewResourceOpen(false);
+      toast.success("Resource added successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'resources');
+    }
+  };
+
+  const handleDeleteResource = async (resourceId: string) => {
+    if (!user || user.role !== 'admin') return;
+    if (!window.confirm("Are you sure you want to delete this resource?")) return;
+
+    try {
+      await deleteDoc(doc(db, 'resources', resourceId));
+      toast.success("Resource deleted successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `resources/${resourceId}`);
+    }
+  };
+
   const handleCreateStaff = async () => {
     if (!newStaff.name || !newStaff.location) {
       toast.error("Name and location are required");
@@ -732,8 +796,8 @@ function AppContent() {
   };
 
   const handleEditInventoryItem = (item: InventoryItem) => {
-    if (user?.role !== 'admin') {
-      toast.error("Only administrators can edit inventory.");
+    if (user?.role !== 'admin' && user?.role !== 'trainer') {
+      toast.error("Only staff members can edit inventory.");
       return;
     }
     setNewInventoryItem({
@@ -940,6 +1004,13 @@ function AppContent() {
             <Package className="w-5 h-5" />
             <span>Inventory</span>
           </button>
+          <button 
+            onClick={() => setActiveTab('resources')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'resources' ? 'bg-red-50 text-red-700 font-semibold' : 'text-slate-600 hover:bg-slate-50'}`}
+          >
+            <ExternalLink className="w-5 h-5" />
+            <span>Resources</span>
+          </button>
         </nav>
 
         <div className="p-4 border-t border-slate-100">
@@ -967,11 +1038,15 @@ function AppContent() {
               {activeTab === 'tasks' && 'Administrative Tasks'}
               {activeTab === 'team' && 'Team Management'}
               {activeTab === 'inventory' && 'Inventory Management'}
+              {activeTab === 'vacations' && 'Vacations & Time-off'}
+              {activeTab === 'resources' && 'Team Resources'}
             </h2>
             <p className="text-slate-500 mt-1">
               {activeTab === 'tasks' && 'Assign and track progress of team operations.'}
               {activeTab === 'team' && 'Manage trainers and their roles within the team.'}
               {activeTab === 'inventory' && 'Track equipment, retail items, and staff supplies.'}
+              {activeTab === 'vacations' && 'Track approved and pending time-off requests.'}
+              {activeTab === 'resources' && 'Quick access to frequently used Google Docs and links.'}
             </p>
           </div>
 
@@ -1059,6 +1134,60 @@ function AppContent() {
                   <DialogFooter>
                     <Button variant="outline" onClick={() => setIsNewTaskOpen(false)}>Cancel</Button>
                     <Button onClick={handleCreateTask} className="bg-red-600 hover:bg-red-700">Assign Task</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+
+            {activeTab === 'resources' && user?.role === 'admin' && (
+              <Dialog open={isNewResourceOpen} onOpenChange={setIsNewResourceOpen}>
+                <DialogTrigger
+                  render={
+                    <Button className="bg-red-600 hover:bg-red-700 shadow-md shadow-red-100 gap-2">
+                      <Plus className="w-4 h-4" />
+                      Add Resource
+                    </Button>
+                  }
+                />
+                <DialogContent className="sm:max-w-[425px]">
+                  <DialogHeader>
+                    <DialogTitle>Add New Resource</DialogTitle>
+                    <DialogDescription>
+                      Add a link to a Google Doc or other frequently used team resource.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="res-title">Title</Label>
+                      <Input 
+                        id="res-title" 
+                        placeholder="e.g. Staff Handbook" 
+                        value={newResource.title}
+                        onChange={(e) => setNewResource({ ...newResource, title: e.target.value })}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="res-url">URL</Label>
+                      <Input 
+                        id="res-url" 
+                        placeholder="docs.google.com/..." 
+                        value={newResource.url}
+                        onChange={(e) => setNewResource({ ...newResource, url: e.target.value })}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="res-category">Category (Optional)</Label>
+                      <Input 
+                        id="res-category" 
+                        placeholder="e.g. Training, Admin, Guides" 
+                        value={newResource.category}
+                        onChange={(e) => setNewResource({ ...newResource, category: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setIsNewResourceOpen(false)}>Cancel</Button>
+                    <Button onClick={handleCreateResource} className="bg-red-600 hover:bg-red-700">Add Link</Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
@@ -2070,28 +2199,32 @@ function AppContent() {
                                 </div>
                               </div>
                               <div className="flex gap-1 absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon" 
-                                  className="h-7 w-7 text-slate-400 hover:text-blue-600 hover:bg-blue-50"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleEditInventoryItem(item);
-                                  }}
-                                >
-                                  <Edit2 className="w-3 h-3" />
-                                </Button>
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon" 
-                                  className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRemoveInventoryItem(item.id);
-                                  }}
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </Button>
+                                {(user?.role === 'admin' || user?.role === 'trainer') && (
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-7 w-7 text-slate-400 hover:text-blue-600 hover:bg-blue-50"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleEditInventoryItem(item);
+                                    }}
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                  </Button>
+                                )}
+                                {user?.role === 'admin' && (
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveInventoryItem(item.id);
+                                    }}
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </Button>
+                                )}
                               </div>
                             </div>
                           </CardHeader>
@@ -2179,6 +2312,96 @@ function AppContent() {
                 </TabsContent>
               </motion.div>
             </Tabs>
+          )}
+
+          {activeTab === 'resources' && (
+            <motion.div 
+              key="resources"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="space-y-6"
+            >
+              <div className="flex items-center gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <Input 
+                    placeholder="Search resources..." 
+                    className="pl-10 border-none bg-transparent focus-visible:ring-0"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {resources
+                  .filter(res => 
+                    res.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    res.category?.toLowerCase().includes(searchQuery.toLowerCase())
+                  )
+                  .map(resource => (
+                    <Card key={resource.id} className="group hover:shadow-lg transition-all duration-300 border-slate-200 bg-white overflow-hidden flex flex-col">
+                      <div className="h-2 bg-red-600" />
+                      <CardHeader className="p-5 pb-2">
+                        <div className="flex justify-between items-start mb-2">
+                          <Badge variant="outline" className="text-[10px] uppercase font-bold border-red-100 text-red-600 bg-red-50/50">
+                            {resource.category || 'General'}
+                          </Badge>
+                          {user?.role === 'admin' && (
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-7 w-7 p-0 text-slate-300 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                              onClick={() => handleDeleteResource(resource.id)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                        <CardTitle className="text-lg font-bold text-slate-900 group-hover:text-red-700 transition-colors line-clamp-2 min-h-[3.5rem] flex items-center">
+                          {resource.title}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-5 pt-0 flex-1 flex flex-col justify-end">
+                        <div className="flex flex-col gap-4 mt-4">
+                          <div className="flex items-center gap-2 text-slate-400 text-[10px] font-medium">
+                            <Clock className="w-3 h-3" />
+                            <span>Added {format(parseISO(resource.createdAt), 'MMM d, yyyy')}</span>
+                          </div>
+                          <a 
+                            href={resource.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="w-full inline-flex items-center justify-center gap-2 bg-slate-900 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-slate-800 transition-all shadow-md active:scale-95"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                            Open Document
+                          </a>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                {resources.length === 0 && (
+                  <div className="col-span-full py-20 text-center bg-white rounded-3xl border-2 border-dashed border-slate-100 shadow-sm">
+                    <FileText className="w-16 h-16 text-slate-200 mx-auto mb-4" />
+                    <h4 className="text-lg font-bold text-slate-400">No Resources Yet</h4>
+                    <p className="text-slate-400 text-sm max-w-xs mx-auto mt-1">
+                      Start adding frequently used Google Docs, spreadsheets, or important links for your team.
+                    </p>
+                    {user?.role === 'admin' && (
+                      <Button 
+                        onClick={() => setIsNewResourceOpen(true)}
+                        variant="link" 
+                        className="mt-4 text-red-600 hover:text-red-700"
+                      >
+                        Add your first resource
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </motion.div>
           )}
         </AnimatePresence>
       </main>

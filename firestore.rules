@@ -22,8 +22,18 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
+    function isRoleTrainer() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'trainer';
+    }
+
     function isAdmin() {
       return isEmailAdmin() || isRoleAdmin();
+    }
+
+    function isStaff() {
+      return isAdmin() || isRoleTrainer();
     }
 
     // ===============================================================
@@ -83,6 +93,14 @@ service cloud.firestore {
              (data.message.html is string || data.message.text is string);
     }
 
+    function isValidResource(data) {
+      return data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.url is string && data.url.size() > 0 &&
+             data.createdAt is string &&
+             data.createdBy is string &&
+             (data.category == null || data.category is string);
+    }
+
     // ===============================================================
     // Routes
     // ===============================================================
@@ -133,8 +151,9 @@ service cloud.firestore {
     // Inventory collection
     match /inventory/{itemId} {
       allow read: if isAuthenticated();
-      allow create, delete: if isAdmin();
-      allow update: if isAuthenticated() && isValidInventoryItem(request.resource.data);
+      allow create: if isStaff() && isValidInventoryItem(request.resource.data);
+      allow update: if isStaff() && isValidInventoryItem(request.resource.data);
+      allow delete: if isAdmin();
     }
     
     // Inventory Reports collection
@@ -148,6 +167,13 @@ service cloud.firestore {
     match /mail/{mailId} {
       allow read: if isAdmin();
       allow create: if isAuthenticated() && isValidMail(request.resource.data);
+    }
+
+    // Resources collection
+    match /resources/{resourceId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidResource(request.resource.data);
+      allow delete: if isAdmin();
     }
     
     // Default deny for everything else
