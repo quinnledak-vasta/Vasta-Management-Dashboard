@@ -96,17 +96,17 @@ service cloud.firestore {
     }
 
     function isValidVacation(data) {
-      return data.userId is string &&
-             data.userName is string &&
-             data.startDate is string &&
-             data.endDate is string &&
-             data.status in ['pending', 'approved', 'rejected'] &&
-             data.type in ['vacation', 'sick', 'personal', 'other'] &&
-             (data.hours == null || data.hours is number) &&
-             (data.notes == null || data.notes is string) &&
-             (data.createdAt == null || data.createdAt is string) &&
-             (data.updatedAt == null || data.updatedAt is string) &&
-             data.totalDays is number;
+      return data.get('userId', '') is string &&
+             data.get('userName', '') is string &&
+             data.get('startDate', '') is string &&
+             data.get('endDate', '') is string &&
+             data.get('status', 'pending') in ['pending', 'approved', 'rejected'] &&
+             data.get('type', 'vacation') in ['vacation', 'sick', 'personal', 'other'] &&
+             (data.get('hours', null) == null || data.get('hours', 0) is number) &&
+             (data.get('notes', null) == null || data.get('notes', '') is string) &&
+             (data.get('createdAt', null) == null || data.get('createdAt', '') is string) &&
+             (data.get('updatedAt', null) == null || data.get('updatedAt', '') is string) &&
+             data.get('totalDays', 0) is number;
     }
 
     function isValidMail(data) {
@@ -160,7 +160,7 @@ service cloud.firestore {
 
     // Vacations collection
     match /vacations/{vacationId} {
-      allow read: if isAdmin();
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
       allow create: if isAuthenticated() && isValidVacation(request.resource.data);
       allow update: if isAdmin() && isValidVacation(request.resource.data);
       allow delete: if isAdmin();

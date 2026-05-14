@@ -358,13 +358,13 @@ function AppContent() {
     if (!user) return;
     const path = 'vacations';
     
-    // Only admins and owners can see the vacations list
-    if (!isAdmin) {
-      setVacations([]);
-      return;
+    let q;
+    if (isAdmin) {
+      q = query(collection(db, path), orderBy('startDate', 'desc'));
+    } else {
+      q = query(collection(db, path), where('userId', '==', user.id), orderBy('startDate', 'desc'));
     }
 
-    const q = query(collection(db, path), orderBy('startDate', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const vacationList = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -375,7 +375,7 @@ function AppContent() {
       handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
-  }, [user]);
+  }, [user, isAdmin]);
 
   // Fetch Inventory from Firestore
   useEffect(() => {
@@ -620,7 +620,19 @@ function AppContent() {
     const selectedTrainer = trainers.find(t => t.id === newVacation.userId);
     const start = new Date(newVacation.startDate);
     const end = new Date(newVacation.endDate);
-    const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+    if (end < start) {
+      toast.error("End date cannot be before start date");
+      return;
+    }
+
+    const diffTime = Math.abs(end.getTime() - start.getTime());
+    const totalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+    if (isNaN(totalDays)) {
+      toast.error("Invalid start or end date");
+      return;
+    }
 
     try {
       if (editingVacationId) {
@@ -1297,8 +1309,11 @@ function AppContent() {
                           id="item-quantity" 
                           type="number" 
                           min="0"
-                          value={newInventoryItem.quantity}
-                          onChange={(e) => setNewInventoryItem({ ...newInventoryItem, quantity: parseInt(e.target.value) || 0 })}
+                          value={isNaN(newInventoryItem.quantity) ? '' : newInventoryItem.quantity}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value);
+                            setNewInventoryItem({ ...newInventoryItem, quantity: isNaN(val) ? 0 : val });
+                          }}
                         />
                       </div>
                       {newInventoryItem.category !== 'equipment' && newInventoryItem.category !== 'staff-apparel' && (
@@ -1309,8 +1324,11 @@ function AppContent() {
                             type="number" 
                             min="0"
                             step="0.01"
-                            value={newInventoryItem.price}
-                            onChange={(e) => setNewInventoryItem({ ...newInventoryItem, price: parseFloat(e.target.value) || 0 })}
+                             value={isNaN(newInventoryItem.price || 0) ? '' : newInventoryItem.price}
+                             onChange={(e) => {
+                               const val = parseFloat(e.target.value);
+                               setNewInventoryItem({ ...newInventoryItem, price: isNaN(val) ? 0 : val });
+                             }}
                           />
                         </div>
                       )}
@@ -1384,11 +1402,14 @@ function AppContent() {
                                     <p className="text-[10px] text-slate-400 font-medium leading-none mb-1">Current: {item.quantity}</p>
                                     <Input
                                       type="number"
-                                      value={reportItemCounts[item.id] ?? item.quantity}
-                                      onChange={(e) => setReportItemCounts({ 
-                                        ...reportItemCounts, 
-                                        [item.id]: parseInt(e.target.value) || 0 
-                                      })}
+                                       value={isNaN(reportItemCounts[item.id] ?? item.quantity) ? '' : (reportItemCounts[item.id] ?? item.quantity)}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value);
+                                        setReportItemCounts({ 
+                                          ...reportItemCounts, 
+                                          [item.id]: isNaN(val) ? 0 : val 
+                                        });
+                                      }}
                                       className="w-20 h-8 text-sm"
                                     />
                                   </div>
@@ -1841,17 +1862,21 @@ function AppContent() {
                   <div className="flex gap-2 flex-shrink-0">
                     <Dialog open={isNewVacationOpen} onOpenChange={(open) => {
                     setIsNewVacationOpen(open);
-                      if (!open) {
-                        setEditingVacationId(null);
-                        setNewVacation({ 
-                          userId: '', 
-                          startDate: new Date().toISOString().split('T')[0], 
-                          endDate: new Date().toISOString().split('T')[0], 
-                          type: 'vacation', 
-                          hours: 8,
-                          notes: '' 
-                        });
+                      if (open) {
+                      if (!editingVacationId && user) {
+                        setNewVacation(prev => ({ ...prev, userId: user.id }));
                       }
+                    } else {
+                      setEditingVacationId(null);
+                      setNewVacation({ 
+                        userId: '', 
+                        startDate: new Date().toISOString().split('T')[0], 
+                        endDate: new Date().toISOString().split('T')[0], 
+                        type: 'vacation', 
+                        hours: 8,
+                        notes: '' 
+                      });
+                    }
                   }}>
                     <DialogTrigger
                       render={
@@ -1934,8 +1959,11 @@ function AppContent() {
                               min="0"
                               max="24"
                               step="0.5"
-                              value={newVacation.hours} 
-                              onChange={e => setNewVacation({...newVacation, hours: parseFloat(e.target.value)})}
+                              value={isNaN(newVacation.hours) ? '' : newVacation.hours} 
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                setNewVacation({...newVacation, hours: isNaN(val) ? 0 : val});
+                              }}
                             />
                           </div>
                         </div>
