@@ -116,7 +116,6 @@ import {
   RecurrenceInterval, 
   TaskNote, 
   TaskQuestion,
-  StaffMember,
   VacationRequest,
   VacationStatus,
   Location,
@@ -193,11 +192,11 @@ export default function App() {
 
 function AppContent() {
   const { user, loading, logout, addInvite } = useAuth();
+  const isAdmin = user?.role === 'admin' || user?.role === 'owner';
   const [tasks, setTasks] = useState<Task[]>([]);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
-  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
   const [vacations, setVacations] = useState<VacationRequest[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [inventoryReports, setInventoryReports] = useState<InventoryReport[]>([]);
@@ -208,7 +207,6 @@ function AppContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [isNewStaffOpen, setIsNewStaffOpen] = useState(false);
   const [isNewVacationOpen, setIsNewVacationOpen] = useState(false);
   const [isNewInventoryOpen, setIsNewInventoryOpen] = useState(false);
   const [isInventoryReportOpen, setIsInventoryReportOpen] = useState(false);
@@ -220,15 +218,8 @@ function AppContent() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [newQuestion, setNewQuestion] = useState('');
 
-  const [newStaff, setNewStaff] = useState({
-    name: '',
-    location: 'Dorset Street' as Location,
-    department: '',
-    status: 'active' as const
-  });
-
   const [newVacation, setNewVacation] = useState({
-    staffId: '',
+    userId: '',
     startDate: new Date().toISOString().split('T')[0],
     endDate: new Date().toISOString().split('T')[0],
     type: 'vacation' as const,
@@ -259,6 +250,7 @@ function AppContent() {
   const [newInvite, setNewInvite] = useState<Partial<Invite>>({
     email: '',
     role: 'trainer',
+    location: 'Dorset Street' as Location
   });
 
   const [newResource, setNewResource] = useState({
@@ -328,7 +320,7 @@ function AppContent() {
 
   // Fetch Invites from Firestore
   useEffect(() => {
-    if (!user || user.role !== 'admin') return;
+    if (!user || !isAdmin) return;
     const path = 'invites';
     const q = query(collection(db, path), orderBy('sentAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -343,17 +335,18 @@ function AppContent() {
     return () => unsubscribe();
   }, [user]);
 
-  // Fetch Staff Members from Firestore
+  // Fetch Resources from Firestore
   useEffect(() => {
     if (!user) return;
-    const path = 'staff';
-    const q = query(collection(db, path), orderBy('name', 'asc'));
+    const path = 'resources';
+    const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const staffList = snapshot.docs.map(doc => ({
+      const resourceList = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
-      })) as StaffMember[];
-      setStaffMembers(staffList);
+      })) as Resource[];
+      setResources(resourceList);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, path);
     });
@@ -365,8 +358,8 @@ function AppContent() {
     if (!user) return;
     const path = 'vacations';
     
-    // Only admins can see the vacations list
-    if (user.role !== 'admin') {
+    // Only admins and owners can see the vacations list
+    if (!isAdmin) {
       setVacations([]);
       return;
     }
@@ -401,7 +394,6 @@ function AppContent() {
     return () => unsubscribe();
   }, [user]);
 
-
   // Fetch Inventory Reports from Firestore
   useEffect(() => {
     if (!user) return;
@@ -413,24 +405,6 @@ function AppContent() {
         ...doc.data()
       })) as InventoryReport[];
       setInventoryReports(reports);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    });
-    return () => unsubscribe();
-  }, [user]);
-
-  // Fetch Resources from Firestore
-  useEffect(() => {
-    if (!user) return;
-    const path = 'resources';
-    const q = query(collection(db, path), orderBy('createdAt', 'desc'));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const resourceList = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Resource[];
-      setResources(resourceList);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, path);
     });
@@ -546,35 +520,34 @@ function AppContent() {
   };
 
   const handleSendInvite = async () => {
-    if (!user || user.role !== 'admin' || !newInvite.email) {
-      toast.error("Admin permissions and email required");
+    if (!user || !isAdmin || !newInvite.email || !newInvite.location) {
+      toast.error("Role permissions, email, and location required");
       return;
     }
-
+    
     const email = newInvite.email.toLowerCase().trim();
 
-    const inviteData: Omit<Invite, 'id'> = {
-      email: email,
-      role: (newInvite.role as UserRole) || 'trainer',
-      status: 'pending',
-      invitedBy: user.id,
-      invitedByName: user.name || user.email,
-      sentAt: new Date().toISOString(),
-    };
-
     try {
-      // Use email as ID for consistency with AuthContext login checks
-      await setDoc(doc(db, 'invites', email), inviteData);
-      setNewInvite({ email: '', role: 'trainer' });
+      await addInvite(email, newInvite.role || 'trainer', newInvite.location);
+      setNewInvite({ email: '', role: 'trainer', location: 'Dorset Street' });
       setIsInviteOpen(false);
-      toast.success(`Invite sent successfully to ${email}`);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `invites/${email}`);
+      // Error handled in AuthContext
+    }
+  };
+
+  const handleUpdateTrainerInfo = async (trainerId: string, role: UserRole, location: Location) => {
+    if (!user || !isAdmin) return;
+    try {
+      await updateDoc(doc(db, 'users', trainerId), { role, location });
+      toast.success("Trainer info updated");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
     }
   };
 
   const handleRemoveMember = async (trainerId: string) => {
-    if (!user || user.role !== 'admin') return;
+    if (!user || !isAdmin) return;
     if (trainerId === user.id) {
       toast.error("You cannot remove yourself");
       return;
@@ -591,7 +564,7 @@ function AppContent() {
   };
 
   const handleRemoveInvite = async (inviteId: string) => {
-    if (!user || user.role !== 'admin') return;
+    if (!user || !isAdmin) return;
 
     if (!window.confirm("Are you sure you want to cancel this invitation?")) return;
 
@@ -604,7 +577,7 @@ function AppContent() {
   };
 
   const handleCreateResource = async () => {
-    if (!user || user.role !== 'admin') return;
+    if (!user || !isAdmin) return;
     if (!newResource.title || !newResource.url) {
       toast.error("Please provide both a title and a URL");
       return;
@@ -628,7 +601,7 @@ function AppContent() {
   };
 
   const handleDeleteResource = async (resourceId: string) => {
-    if (!user || user.role !== 'admin') return;
+    if (!user || !isAdmin) return;
     if (!window.confirm("Are you sure you want to delete this resource?")) return;
 
     try {
@@ -639,38 +612,12 @@ function AppContent() {
     }
   };
 
-  const handleCreateStaff = async () => {
-    if (!newStaff.name || !newStaff.location) {
-      toast.error("Name and location are required");
-      return;
-    }
-    try {
-      await addDoc(collection(db, 'staff'), newStaff);
-      setNewStaff({ name: '', location: 'Dorset Street', department: '', status: 'active' });
-      setIsNewStaffOpen(false);
-      toast.success("Staff member added");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'staff');
-    }
-  };
-
-  const handleRemoveStaff = async (staffId: string) => {
-    if (!user || user.role !== 'admin') return;
-    if (!window.confirm("Are you sure you want to remove this staff member? All their vacation records will remain.")) return;
-    try {
-      await deleteDoc(doc(db, 'staff', staffId));
-      toast.success("Staff member removed");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `staff/${staffId}`);
-    }
-  };
-
   const handleCreateVacation = async () => {
-    if (!newVacation.staffId || !newVacation.startDate || !newVacation.endDate) {
+    if (!newVacation.userId || !newVacation.startDate || !newVacation.endDate) {
       toast.error("Please fill in all required fields");
       return;
     }
-    const staff = staffMembers.find(s => s.id === newVacation.staffId);
+    const selectedTrainer = trainers.find(t => t.id === newVacation.userId);
     const start = new Date(newVacation.startDate);
     const end = new Date(newVacation.endDate);
     const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
@@ -678,8 +625,8 @@ function AppContent() {
     try {
       if (editingVacationId) {
         const vacationData = {
-          staffId: newVacation.staffId,
-          staffName: staff?.name || 'Unknown',
+          userId: newVacation.userId,
+          userName: selectedTrainer?.name || 'Unknown',
           startDate: newVacation.startDate,
           endDate: newVacation.endDate,
           type: newVacation.type,
@@ -692,8 +639,8 @@ function AppContent() {
         toast.success("Vacation request updated");
       } else {
         const vacationData = {
-          staffId: newVacation.staffId,
-          staffName: staff?.name || 'Unknown',
+          userId: newVacation.userId,
+          userName: selectedTrainer?.name || 'Unknown',
           startDate: newVacation.startDate,
           endDate: newVacation.endDate,
           status: 'pending' as VacationStatus,
@@ -705,10 +652,48 @@ function AppContent() {
         };
         await addDoc(collection(db, 'vacations'), vacationData);
         toast.success("Vacation request submitted");
+
+        // Send email alerts to location admins and owners
+        try {
+          const recipients = trainers.filter(t => 
+            (t.role === 'admin' && t.location === selectedTrainer?.location) || 
+            t.role === 'owner'
+          );
+
+          for (const recipient of recipients) {
+            if (recipient.email) {
+              await addDoc(collection(db, 'mail'), {
+                to: recipient.email,
+                message: {
+                  subject: `New Vacation Request: ${selectedTrainer?.name}`,
+                  html: `
+                    <div style="font-family: sans-serif; padding: 20px; color: #333;">
+                      <h2 style="color: #ef4444;">New Vacation Request</h2>
+                      <p>Hi <strong>${recipient.name}</strong>,</p>
+                      <p><strong>${selectedTrainer?.name}</strong> has submitted a new vacation request for your review.</p>
+                      <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                        <p><strong>Staff Member:</strong> ${selectedTrainer?.name}</p>
+                        <p><strong>Location:</strong> ${selectedTrainer?.location || 'N/A'}</p>
+                        <p><strong>Dates:</strong> ${new Date(vacationData.startDate).toLocaleDateString()} to ${new Date(vacationData.endDate).toLocaleDateString()}</p>
+                        <p><strong>Type:</strong> ${vacationData.type.charAt(0).toUpperCase() + vacationData.type.slice(1)}</p>
+                        <p><strong>Notes:</strong> ${vacationData.notes || 'No notes provided.'}</p>
+                      </div>
+                      <p>Please log in to the dashboard to approve or reject this request.</p>
+                      <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                      <p style="font-size: 12px; color: #94a3b8;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                    </div>
+                  `
+                }
+              });
+            }
+          }
+        } catch (emailError) {
+          console.error("Error sending vacation alerts:", emailError);
+        }
       }
 
       setNewVacation({ 
-        staffId: '', 
+        userId: '', 
         startDate: new Date().toISOString().split('T')[0], 
         endDate: new Date().toISOString().split('T')[0], 
         type: 'vacation', 
@@ -723,12 +708,12 @@ function AppContent() {
   };
 
   const handleEditVacation = (vacation: VacationRequest) => {
-    if (user?.role !== 'admin') {
+    if (!isAdmin) {
       toast.error("Only administrators can edit vacation requests.");
       return;
     }
     setNewVacation({
-      staffId: vacation.staffId,
+      userId: vacation.userId,
       startDate: vacation.startDate,
       endDate: vacation.endDate,
       type: vacation.type,
@@ -740,17 +725,45 @@ function AppContent() {
   };
 
   const handleUpdateVacationStatus = async (vacationId: string, status: VacationStatus) => {
-    if (!user || user.role !== 'admin') return;
+    if (!user || !isAdmin) return;
     try {
       await updateDoc(doc(db, 'vacations', vacationId), { status });
       toast.success(`Vacation request ${status}`);
+      
+      // Notify the user who requested the vacation
+      const vacation = vacations.find(v => v.id === vacationId);
+      if (vacation && vacation.userId) {
+        const trainer = trainers.find(t => t.id === vacation.userId);
+        if (trainer && trainer.email) {
+          try {
+            await addDoc(collection(db, 'mail'), {
+              to: trainer.email,
+              message: {
+                subject: `Vacation Request ${status.charAt(0).toUpperCase() + status.slice(1)}`,
+                html: `
+                  <div style="font-family: sans-serif; padding: 20px; color: #333;">
+                    <h2 style="color: ${status === 'approved' ? '#22c55e' : '#ef4444'};">Vacation Request ${status.charAt(0).toUpperCase() + status.slice(1)}</h2>
+                    <p>Hi <strong>${trainer.name}</strong>,</p>
+                    <p>Your vacation request for <strong>${new Date(vacation.startDate).toLocaleDateString()} to ${new Date(vacation.endDate).toLocaleDateString()}</strong> has been <strong>${status}</strong> by an administrator.</p>
+                    <p>Please log in to the dashboard for more details.</p>
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                    <p style="font-size: 12px; color: #94a3b8;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                  </div>
+                `
+              }
+            });
+          } catch (emailError) {
+            console.error("Error sending vacation status update email:", emailError);
+          }
+        }
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `vacations/${vacationId}`);
     }
   };
 
   const handleRemoveVacation = async (vacationId: string) => {
-    if (!user || user.role !== 'admin') return;
+    if (!user || !isAdmin) return;
     if (!window.confirm("Are you sure you want to delete this vacation record?")) return;
     try {
       await deleteDoc(doc(db, 'vacations', vacationId));
@@ -1139,7 +1152,7 @@ function AppContent() {
               </Dialog>
             )}
 
-            {activeTab === 'resources' && user?.role === 'admin' && (
+            {activeTab === 'resources' && isAdmin && (
               <Dialog open={isNewResourceOpen} onOpenChange={setIsNewResourceOpen}>
                 <DialogTrigger
                   render={
@@ -1493,7 +1506,7 @@ function AppContent() {
                                     <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleUpdateTaskStatus(task.id, 'in-progress'); }}>In Progress</DropdownMenuItem>
                                     <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleUpdateTaskStatus(task.id, 'completed'); }}>Completed</DropdownMenuItem>
                                   </DropdownMenuGroup>
-                                  {(user?.role === 'admin' || task.createdBy === user?.id) && (
+                                  {(isAdmin || task.createdBy === user?.id) && (
                                     <>
                                       <DropdownMenuSeparator />
                                       <DropdownMenuItem 
@@ -1555,131 +1568,184 @@ function AppContent() {
             >
               <div className="flex justify-between items-center">
                 <div>
-                  <h3 className="text-xl font-bold text-slate-900">Active Trainers</h3>
-                  <p className="text-sm text-slate-500">Currently active members of the training team.</p>
+                  <h3 className="text-xl font-bold text-slate-900">Team Management</h3>
+                  <p className="text-sm text-slate-500">Manage trainers and invitations.</p>
                 </div>
-                <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
-                  <DialogTrigger
-                    render={
-                      <Button className="bg-red-600 hover:bg-red-700 gap-2">
-                        <UserPlus className="w-4 h-4" />
-                        Invite Member
-                      </Button>
-                    }
-                  />
-                  <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
-                    <DialogHeader>
-                      <DialogTitle>Invite Team Member</DialogTitle>
-                      <DialogDescription>
-                        Send an invitation to a new team member. They will receive an email to join the Vasta dashboard.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                      <div className="grid gap-2">
-                        <Label htmlFor="invite-email">Email Address</Label>
-                        <Input 
-                          id="invite-email" 
-                          type="email" 
-                          placeholder="trainer@example.com" 
-                          value={newInvite.email}
-                          onChange={(e) => setNewInvite({ ...newInvite, email: e.target.value })}
-                        />
+                <div className="flex gap-2">
+                  <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
+                    <DialogTrigger
+                      render={
+                        <Button variant="outline" className="border-slate-200 gap-2">
+                          <UserPlus className="w-4 h-4" />
+                          Invite Trainer
+                        </Button>
+                      }
+                    />
+                    <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
+                      <DialogHeader>
+                        <DialogTitle>Invite Trainer</DialogTitle>
+                        <DialogDescription>
+                          Send an invitation to a new trainer. They will receive an email to join the Vasta dashboard.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
+                        <div className="grid gap-2">
+                          <Label htmlFor="invite-email">Email Address</Label>
+                          <Input 
+                            id="invite-email" 
+                            type="email" 
+                            placeholder="trainer@example.com" 
+                            value={newInvite.email}
+                            onChange={(e) => setNewInvite({ ...newInvite, email: e.target.value })}
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="invite-role">Assigned Role</Label>
+                          <Select 
+                            value={newInvite.role} 
+                            onValueChange={(val) => setNewInvite({ ...newInvite, role: val as UserRole })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="trainer">Trainer</SelectItem>
+                              <SelectItem value="admin">Admin</SelectItem>
+                              <SelectItem value="owner">Owner</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="invite-location">Primary Location</Label>
+                          <Select 
+                            value={newInvite.location} 
+                            onValueChange={(val) => setNewInvite({ ...newInvite, location: val as Location })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Dorset Street">Dorset Street</SelectItem>
+                              <SelectItem value="Shelburne Road">Shelburne Road</SelectItem>
+                              <SelectItem value="West Palm Beach">West Palm Beach</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="invite-role">Assigned Role</Label>
-                        <Select 
-                          value={newInvite.role} 
-                          onValueChange={(val) => setNewInvite({ ...newInvite, role: val as UserRole })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="trainer">Trainer</SelectItem>
-                            <SelectItem value="admin">Admin</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setIsInviteOpen(false)}>Cancel</Button>
-                      <Button onClick={handleSendInvite} className="bg-red-600 hover:bg-red-700">Send Invitation</Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
+                      <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsInviteOpen(false)}>Cancel</Button>
+                        <Button onClick={handleSendInvite} className="bg-red-600 hover:bg-red-700">Send Invitation</Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </div>
               </div>
 
-              <Card className="border-slate-200">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50/50">
-                      <TableHead className="w-[300px]">Trainer</TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>Active Tasks</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {trainers.map((trainer) => (
-                      <TableRow key={trainer.id} className="hover:bg-slate-50/50 transition-colors">
-                        <TableCell className="font-medium">
-                          <div className="flex items-center gap-3">
-                            <Avatar className="w-10 h-10">
-                              <AvatarImage src={trainer.photoURL} />
-                              <AvatarFallback>{trainer.name[0]}</AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-bold text-slate-900">{trainer.name}</p>
-                              <p className="text-xs text-slate-500">ID: {trainer.id}</p>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-slate-600">{trainer.email}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={`capitalize ${trainer.role === 'admin' ? 'border-red-200 text-red-700 bg-red-50' : 'border-slate-200 text-slate-600'}`}>
-                            {trainer.role}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="w-20 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-red-500" 
-                                style={{ width: `${(tasks.filter(t => t.assignedTo === trainer.id && t.status !== 'completed').length / 5) * 100}%` }}
-                              />
-                            </div>
-                            <span className="text-xs font-medium text-slate-500">
-                              {tasks.filter(t => t.assignedTo === trainer.id && t.status !== 'completed').length}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            {user.role === 'admin' && (
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className="text-slate-400 hover:text-red-600"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  handleRemoveMember(trainer.id);
-                                }}
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            )}
-                            <Button variant="ghost" size="sm" className="text-slate-400 hover:text-slate-600">
-                              <ChevronRight className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
+              <div>
+                <h4 className="text-lg font-bold text-slate-900 mb-4">Active Trainers</h4>
+                <Card className="border-slate-200">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-slate-50/50">
+                        <TableHead className="w-[250px]">Trainer</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Location</TableHead>
+                        <TableHead>Role</TableHead>
+                        <TableHead>Active Tasks</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Card>
+                    </TableHeader>
+                    <TableBody>
+                      {trainers.map((trainer) => (
+                        <TableRow key={trainer.id} className="hover:bg-slate-50/50 transition-colors">
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-3">
+                              <Avatar className="w-10 h-10">
+                                <AvatarImage src={trainer.photoURL} />
+                                <AvatarFallback>{trainer.name[0]}</AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <p className="font-bold text-slate-900">{trainer.name}</p>
+                                <p className="text-xs text-slate-500">ID: {trainer.id}</p>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-slate-600">{trainer.email}</TableCell>
+                          <TableCell>
+                            {trainer.location ? (
+                              <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-100 flex items-center gap-1 w-fit">
+                                <MapPin className="w-3 h-3" />
+                                {trainer.location}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-slate-400 italic">Not set</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className={`capitalize ${trainer.role === 'admin' || trainer.role === 'owner' ? 'border-red-200 text-red-700 bg-red-50' : 'border-slate-200 text-slate-600'}`}>
+                              {trainer.role}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <div className="w-20 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full bg-red-500" 
+                                  style={{ width: `${(tasks.filter(t => t.assignedTo === trainer.id && t.status !== 'completed').length / 5) * 100}%` }}
+                                />
+                              </div>
+                              <span className="text-xs font-medium text-slate-500">
+                                {tasks.filter(t => t.assignedTo === trainer.id && t.status !== 'completed').length}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-2">
+                              {isAdmin && (
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger
+                                    render={
+                                      <Button variant="ghost" size="sm" className="text-slate-400 hover:text-slate-600">
+                                        <Edit2 className="w-4 h-4" />
+                                      </Button>
+                                    }
+                                  />
+                                  <DropdownMenuContent align="end" className="w-48">
+                                    <DropdownMenuGroup>
+                                      <DropdownMenuLabel>Update Location</DropdownMenuLabel>
+                                      <DropdownMenuItem onClick={() => handleUpdateTrainerInfo(trainer.id, trainer.role, 'Dorset Street')}>Dorset Street</DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => handleUpdateTrainerInfo(trainer.id, trainer.role, 'Shelburne Road')}>Shelburne Road</DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => handleUpdateTrainerInfo(trainer.id, trainer.role, 'West Palm Beach')}>West Palm Beach</DropdownMenuItem>
+                                    </DropdownMenuGroup>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuGroup>
+                                      <DropdownMenuLabel>Update Role</DropdownMenuLabel>
+                                      <DropdownMenuItem onClick={() => handleUpdateTrainerInfo(trainer.id, 'trainer', trainer.location || 'Dorset Street')}>Trainer</DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => handleUpdateTrainerInfo(trainer.id, 'admin', trainer.location || 'Dorset Street')}>Admin</DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => handleUpdateTrainerInfo(trainer.id, 'owner', trainer.location || 'Dorset Street')}>Owner</DropdownMenuItem>
+                                    </DropdownMenuGroup>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem 
+                                      className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                                      onClick={() => handleRemoveMember(trainer.id)}
+                                    >
+                                      <Trash2 className="w-4 h-4 mr-2" />
+                                      Remove Member
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              )}
+                              <Button variant="ghost" size="sm" className="text-slate-400 hover:text-slate-600">
+                                <ChevronRight className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </Card>
+              </div>
 
               {invites.length > 0 && (
                 <div className="space-y-4">
@@ -1692,6 +1758,7 @@ function AppContent() {
                       <TableHeader>
                         <TableRow className="bg-slate-50/50">
                           <TableHead>Recipient</TableHead>
+                          <TableHead>Location</TableHead>
                           <TableHead>Role</TableHead>
                           <TableHead>Sent By</TableHead>
                           <TableHead>Sent At</TableHead>
@@ -1702,6 +1769,12 @@ function AppContent() {
                         {invites.map((invite) => (
                           <TableRow key={invite.id}>
                             <TableCell className="font-medium text-slate-900">{invite.email}</TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1 text-xs text-slate-600">
+                                <MapPin className="w-3 h-3 text-red-500" />
+                                {invite.location}
+                              </div>
+                            </TableCell>
                             <TableCell>
                               <Badge variant="outline" className="capitalize">{invite.role}</Badge>
                             </TableCell>
@@ -1714,7 +1787,7 @@ function AppContent() {
                                 <Badge className="bg-amber-50 text-amber-700 border-amber-100 capitalize">
                                   {invite.status}
                                 </Badge>
-                                {user.role === 'admin' && (
+                                {isAdmin && (
                                   <Button 
                                     variant="ghost" 
                                     size="sm" 
@@ -1766,86 +1839,19 @@ function AppContent() {
                   </TabsList>
 
                   <div className="flex gap-2 flex-shrink-0">
-                  <Dialog open={isNewStaffOpen} onOpenChange={setIsNewStaffOpen}>
-                    <DialogTrigger
-                      render={
-                        <Button variant="outline" className="gap-2">
-                          <Users className="w-4 h-4" />
-                          Manage Staff
-                        </Button>
-                      }
-                    />
-                    <DialogContent className="sm:max-w-[500px]">
-                      <DialogHeader>
-                        <DialogTitle>Staff Management</DialogTitle>
-                        <DialogDescription>Add or remove staff members managed in this dashboard.</DialogDescription>
-                      </DialogHeader>
-                      <div className="space-y-4 py-4">
-                        <div className="grid grid-cols-2 gap-4 border-b border-slate-100 pb-4">
-                          <div className="grid gap-2">
-                            <Label>Name</Label>
-                            <Input 
-                              value={newStaff.name} 
-                              onChange={e => setNewStaff({...newStaff, name: e.target.value})}
-                              placeholder="Full Name"
-                            />
-                          </div>
-                          <div className="grid gap-2">
-                            <Label>Location</Label>
-                            <Select 
-                              value={newStaff.location} 
-                              onValueChange={val => setNewStaff({...newStaff, location: val as Location})}
-                            >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select location" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="Dorset Street">Dorset Street</SelectItem>
-                                <SelectItem value="Shelburne Road">Shelburne Road</SelectItem>
-                                <SelectItem value="West Palm Beach">West Palm Beach</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="grid gap-2 col-span-2">
-                            <Button onClick={handleCreateStaff} className="w-full bg-red-600 hover:bg-red-700">Add Staff Member</Button>
-                          </div>
-                        </div>
-                        <div className="max-h-[300px] overflow-y-auto space-y-2">
-                          <h4 className="text-sm font-semibold">Active Staff</h4>
-                          {staffMembers.map(staff => (
-                            <div key={staff.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                              <div>
-                                <p className="text-sm font-medium">{staff.name}</p>
-                                <p className="text-xs text-slate-500">{staff.location}</p>
-                              </div>
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className="text-slate-400 hover:text-red-600"
-                                onClick={() => handleRemoveStaff(staff.id)}
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </DialogContent>
-                  </Dialog>
-
-                  <Dialog open={isNewVacationOpen} onOpenChange={(open) => {
+                    <Dialog open={isNewVacationOpen} onOpenChange={(open) => {
                     setIsNewVacationOpen(open);
-                    if (!open) {
-                      setEditingVacationId(null);
-                      setNewVacation({ 
-                        staffId: '', 
-                        startDate: new Date().toISOString().split('T')[0], 
-                        endDate: new Date().toISOString().split('T')[0], 
-                        type: 'vacation', 
-                        hours: 8,
-                        notes: '' 
-                      });
-                    }
+                      if (!open) {
+                        setEditingVacationId(null);
+                        setNewVacation({ 
+                          userId: '', 
+                          startDate: new Date().toISOString().split('T')[0], 
+                          endDate: new Date().toISOString().split('T')[0], 
+                          type: 'vacation', 
+                          hours: 8,
+                          notes: '' 
+                        });
+                      }
                   }}>
                     <DialogTrigger
                       render={
@@ -1864,18 +1870,23 @@ function AppContent() {
                       </DialogHeader>
                       <div className="grid gap-4 py-4">
                         <div className="grid gap-2">
-                          <Label>Staff Member</Label>
+                          <Label>Team Member</Label>
                           <Select 
-                            value={newVacation.staffId} 
-                            onValueChange={val => setNewVacation({...newVacation, staffId: val})}
+                            value={newVacation.userId} 
+                            onValueChange={val => setNewVacation({...newVacation, userId: val})}
                             disabled={!!editingVacationId}
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder="Select staff..." />
+                              <SelectValue placeholder="Select member..." />
                             </SelectTrigger>
                             <SelectContent>
-                              {staffMembers.map(s => (
-                                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                              {trainers.map(s => (
+                                <SelectItem key={s.id} value={s.id}>
+                                  <div className="flex items-center justify-between w-full min-w-[200px]">
+                                    <span>{s.name}</span>
+                                    <span className="text-[10px] text-slate-400 font-normal ml-2">({s.location})</span>
+                                  </div>
+                                </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
@@ -1998,13 +2009,13 @@ function AppContent() {
                                           ? 'bg-red-50 text-red-700 border-red-100'
                                           : 'bg-amber-50 text-amber-700 border-amber-100'
                                       }`}
-                                      title={`${v.staffName} (${v.type})${v.hours ? ` - ${v.hours}hrs` : ''}`}
+                                      title={`${v.userName} (${v.type})${v.hours ? ` - ${v.hours}hrs` : ''}`}
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleEditVacation(v);
                                       }}
                                     >
-                                      {v.staffName} {v.hours && <span className="opacity-60 text-[8px]">({v.hours}h)</span>}
+                                      {v.userName} {v.hours && <span className="opacity-60 text-[8px]">({v.hours}h)</span>}
                                     </div>
                                   ))}
                                 {dayVacations.length > 3 && (
@@ -2026,7 +2037,7 @@ function AppContent() {
                     <Table>
                       <TableHeader>
                         <TableRow className="bg-slate-50/50">
-                          <TableHead>Staff Member</TableHead>
+                          <TableHead>Team Member</TableHead>
                           <TableHead>Type</TableHead>
                           <TableHead>Period</TableHead>
                           <TableHead>Days</TableHead>
@@ -2039,7 +2050,7 @@ function AppContent() {
                           <TableRow key={vacation.id} className="hover:bg-slate-50/50 transition-colors">
                             <TableCell className="font-bold text-slate-900">
                               <div>
-                                {vacation.staffName}
+                                {vacation.userName}
                                 {vacation.hours && <p className="text-[10px] font-normal text-slate-400">{vacation.hours} hrs/day</p>}
                               </div>
                             </TableCell>
@@ -2061,7 +2072,7 @@ function AppContent() {
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2">
-                                {user.role === 'admin' && (
+                                {isAdmin && (
                                   <Button 
                                     variant="ghost" 
                                     size="sm" 
@@ -2071,7 +2082,7 @@ function AppContent() {
                                     <Edit2 className="w-4 h-4" />
                                   </Button>
                                 )}
-                                {user.role === 'admin' && vacation.status === 'pending' && (
+                                {isAdmin && vacation.status === 'pending' && (
                                   <>
                                     <Button 
                                       variant="ghost" 
@@ -2091,7 +2102,7 @@ function AppContent() {
                                     </Button>
                                   </>
                                 )}
-                                {user.role === 'admin' && (
+                                {isAdmin && (
                                   <Button 
                                     variant="ghost" 
                                     size="sm" 
@@ -2199,7 +2210,7 @@ function AppContent() {
                                 </div>
                               </div>
                               <div className="flex gap-1 absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                {(user?.role === 'admin' || user?.role === 'trainer') && (
+                                {(isAdmin || user?.role === 'trainer') && (
                                   <Button 
                                     variant="ghost" 
                                     size="icon" 
@@ -2212,7 +2223,7 @@ function AppContent() {
                                     <Edit2 className="w-3 h-3" />
                                   </Button>
                                 )}
-                                {user?.role === 'admin' && (
+                                {isAdmin && (
                                   <Button 
                                     variant="ghost" 
                                     size="icon" 
@@ -2348,7 +2359,7 @@ function AppContent() {
                           <Badge variant="outline" className="text-[10px] uppercase font-bold border-red-100 text-red-600 bg-red-50/50">
                             {resource.category || 'General'}
                           </Badge>
-                          {user?.role === 'admin' && (
+                          {isAdmin && (
                             <Button 
                               variant="ghost" 
                               size="sm" 
@@ -2389,7 +2400,7 @@ function AppContent() {
                     <p className="text-slate-400 text-sm max-w-xs mx-auto mt-1">
                       Start adding frequently used Google Docs, spreadsheets, or important links for your team.
                     </p>
-                    {user?.role === 'admin' && (
+                    {isAdmin && (
                       <Button 
                         onClick={() => setIsNewResourceOpen(true)}
                         variant="link" 
@@ -2484,7 +2495,7 @@ function AppContent() {
                               <p className="text-xs text-slate-600">{q.answer}</p>
                             </div>
                           ) : (
-                            user?.role === 'admin' && (
+                            isAdmin && (
                               <div className="mt-2 flex gap-2">
                                 <Input 
                                   placeholder="Type answer..." 
@@ -2556,7 +2567,7 @@ function AppContent() {
               <DialogFooter className="sm:justify-between items-center">
                 <div className="flex items-center gap-4">
                   <p className="text-[10px] text-slate-400">Created {format(new Date(selectedTask.createdAt), 'MMM d, yyyy')}</p>
-                  {(user?.role === 'admin' || selectedTask.createdBy === user?.id) && (
+                  {(isAdmin || selectedTask.createdBy === user?.id) && (
                     <Button 
                       variant="ghost" 
                       size="sm" 

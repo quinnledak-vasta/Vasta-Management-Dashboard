@@ -28,8 +28,14 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'trainer';
     }
 
+    function isRoleOwner() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner';
+    }
+
     function isAdmin() {
-      return isEmailAdmin() || isRoleAdmin();
+      return isEmailAdmin() || isRoleAdmin() || isRoleOwner();
     }
 
     function isStaff() {
@@ -56,12 +62,15 @@ service cloud.firestore {
     function isValidUser(data) {
       return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              data.email is string &&
-             data.role in ['admin', 'trainer'];
+             data.role in ['admin', 'trainer', 'owner'] &&
+             (data.location == null || data.location in ['Dorset Street', 'Shelburne Road', 'West Palm Beach']) &&
+             (data.photoURL == null || data.photoURL is string);
     }
 
     function isValidInvite(data) {
       return data.email is string &&
-             data.role in ['admin', 'trainer'] &&
+             data.role in ['admin', 'trainer', 'owner'] &&
+             data.location in ['Dorset Street', 'Shelburne Road', 'West Palm Beach'] &&
              data.status in ['pending', 'accepted', 'expired'] &&
              data.invitedBy is string &&
              data.invitedByName is string &&
@@ -84,6 +93,20 @@ service cloud.firestore {
              data.reportedByName is string &&
              data.reportedAt is string &&
              data.items is list;
+    }
+
+    function isValidVacation(data) {
+      return data.userId is string &&
+             data.userName is string &&
+             data.startDate is string &&
+             data.endDate is string &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             data.type in ['vacation', 'sick', 'personal', 'other'] &&
+             (data.hours == null || data.hours is number) &&
+             (data.notes == null || data.notes is string) &&
+             (data.createdAt == null || data.createdAt is string) &&
+             (data.updatedAt == null || data.updatedAt is string) &&
+             data.totalDays is number;
     }
 
     function isValidMail(data) {
@@ -135,17 +158,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Staff collection (Managed entities)
-    match /staff/{staffId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
     // Vacations collection
     match /vacations/{vacationId} {
       allow read: if isAdmin();
-      allow create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+      allow create: if isAuthenticated() && isValidVacation(request.resource.data);
+      allow update: if isAdmin() && isValidVacation(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     // Inventory collection

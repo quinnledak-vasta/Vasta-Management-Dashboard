@@ -1,6 +1,6 @@
 export type TaskStatus = 'pending' | 'in-progress' | 'completed';
 export type Priority = 'low' | 'medium' | 'high';
-export type UserRole = 'admin' | 'trainer';
+export type UserRole = 'admin' | 'trainer' | 'owner';
 export type RecurrenceInterval = 'daily' | 'weekly' | 'monthly' | 'none';
 
 export interface Mail {
@@ -59,6 +59,7 @@ export interface Trainer {
   name: string;
   email: string;
   role: UserRole;
+  location?: Location;
   photoURL?: string;
 }
 
@@ -75,6 +76,7 @@ export interface Invite {
   id: string;
   email: string;
   role: UserRole;
+  location: Location;
   invitedBy: string;
   invitedByName: string;
   sentAt: string;
@@ -85,19 +87,10 @@ export type VacationStatus = 'pending' | 'approved' | 'rejected';
 export type Location = 'Dorset Street' | 'Shelburne Road' | 'West Palm Beach';
 export type InventoryCategory = 'equipment' | 'retail-equipment' | 'retail-food-drink' | 'retail-apparel' | 'staff-apparel';
 
-export interface StaffMember {
-  id: string;
-  name: string;
-  location: Location;
-  department?: string;
-  startDate?: string;
-  status: 'active' | 'inactive';
-}
-
 export interface VacationRequest {
   id: string;
-  staffId: string;
-  staffName: string;
+  userId: string;
+  userName: string;
   startDate: string;
   endDate: string;
   status: VacationStatus;

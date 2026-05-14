@@ -14,7 +14,8 @@ interface User {
   id: string;
   name: string;
   email: string;
-  role: 'admin' | 'trainer';
+  role: 'admin' | 'trainer' | 'owner';
+  location?: string;
   photoURL?: string;
 }
 
@@ -23,7 +24,7 @@ interface AuthContextType {
   loading: boolean;
   login: () => Promise<void>;
   logout: () => Promise<void>;
-  addInvite: (email: string, role: string) => Promise<void>;
+  addInvite: (email: string, role: string, location: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -60,12 +61,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const isOwner = firebaseUser.email === 'quinnledak@vastasports.com';
 
         if (inviteDoc.exists() || isOwner) {
-          const role = isOwner ? 'admin' : (inviteDoc.data()?.role || 'trainer');
+          const inviteData = inviteDoc.data();
+          const role = isOwner ? 'admin' : (inviteData?.role || 'trainer');
+          const location = isOwner ? 'Dorset Street' : (inviteData?.location || 'Dorset Street');
+          
           const newUser: User = {
             id: firebaseUser.uid,
             name: firebaseUser.displayName || 'Team Member',
             email: firebaseUser.email || '',
-            role: role as 'admin' | 'trainer',
+            role: role as 'admin' | 'trainer' | 'owner',
+            location: location,
             photoURL: firebaseUser.photoURL || undefined
           };
           
@@ -107,11 +112,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const addInvite = async (email: string, role: string) => {
+  const addInvite = async (email: string, role: string, location: string) => {
     try {
       await setDoc(doc(db, 'invites', email.toLowerCase()), {
         email: email.toLowerCase(),
         role,
+        location,
         invitedBy: user?.id,
         invitedByName: user?.name,
         sentAt: new Date().toISOString(),

@@ -27,37 +27,44 @@
       "description": "A system user",
       "type": "object",
       "properties": {
+        "id": { "type": "string" },
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
-        "role": { "type": "string", "enum": ["admin", "trainer"] }
-      }
+        "role": { "type": "string", "enum": ["admin", "trainer", "owner"] },
+        "location": { "type": "string", "enum": ["Dorset Street", "Shelburne Road", "West Palm Beach"] },
+        "photoURL": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role"]
     },
-    "StaffMember": {
-      "title": "Staff Member",
-      "description": "A managed staff member without app access",
+    "Invite": {
+      "title": "Invite",
+      "description": "An invitation to join the team",
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "trainer", "owner"] },
         "location": { "type": "string", "enum": ["Dorset Street", "Shelburne Road", "West Palm Beach"] },
-        "department": { "type": "string" },
-        "status": { "type": "string", "enum": ["active", "inactive"] }
+        "invitedBy": { "type": "string" },
+        "invitedByName": { "type": "string" },
+        "sentAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "expired"] }
       },
-      "required": ["name", "location", "status"]
+      "required": ["email", "role", "location", "status"]
     },
     "VacationRequest": {
       "title": "Vacation Request",
-      "description": "A vacation or time-off request for a staff member",
+      "description": "A vacation or time-off request for a team member",
       "type": "object",
       "properties": {
-        "staffId": { "type": "string" },
-        "staffName": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
         "startDate": { "type": "string", "format": "date" },
         "endDate": { "type": "string", "format": "date" },
         "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
         "type": { "type": "string", "enum": ["vacation", "sick", "personal", "other"] },
         "hours": { "type": "number", "description": "Number of hours affected" }
       },
-      "required": ["staffId", "startDate", "endDate", "status", "type"]
+      "required": ["userId", "startDate", "endDate", "status", "type"]
     },
     "InventoryItem": {
       "title": "Inventory Item",
@@ -128,9 +135,9 @@
       "schema": "User",
       "description": "User profiles"
     },
-    "/staff/{staffId}": {
-      "schema": "StaffMember",
-      "description": "Managed staff members"
+    "/invites/{email}": {
+      "schema": "Invite",
+      "description": "Active invitations"
     },
     "/vacations/{vacationId}": {
       "schema": "VacationRequest",
