@@ -37,7 +37,8 @@ import {
   Dumbbell,
   ExternalLink,
   MapPin,
-  FileText
+  FileText,
+  Award
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
@@ -123,7 +124,8 @@ import {
   InventoryCategory,
   InventoryReport,
   InventoryReportItem,
-  Resource
+  Resource,
+  Certification
 } from './types';
 import { GoogleGenAI } from "@google/genai";
 
@@ -203,6 +205,13 @@ function AppContent() {
   const [resources, setResources] = useState<Resource[]>([]);
   
   const [activeTab, setActiveTab] = useState('tasks');
+  const [certSearchQuery, setCertSearchQuery] = useState('');
+  const [expandedTrainerId, setExpandedTrainerId] = useState<string | null>(null);
+  const [newCertName, setNewCertName] = useState('');
+  const [newCertExpiration, setNewCertExpiration] = useState('');
+  const [newCertRenewal, setNewCertRenewal] = useState('');
+  const [newCertInProgress, setNewCertInProgress] = useState(false);
+  const [newCertExpectedCompletion, setNewCertExpectedCompletion] = useState('');
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
@@ -343,6 +352,157 @@ function AppContent() {
     });
     return () => unsubscribe();
   }, [user]);
+
+  // Check and send alerts for certifications approaching their target dates (1 month prior)
+  useEffect(() => {
+    if (!user || trainers.length === 0) return;
+
+    const checkCerts = async () => {
+      const today = new Date();
+      // Calculate active timeframe: warning starts 30 days / 1 month prior
+      const oneMonthMs = 30 * 24 * 60 * 60 * 1000;
+
+      // Decide which trainers we are allowed to check based on permissions
+      const trainersToCheck = isAdmin 
+        ? trainers 
+        : trainers.filter(t => t.id === user.id);
+
+      for (const trainer of trainersToCheck) {
+        if (!trainer.certifications || trainer.certifications.length === 0) continue;
+
+        let docUpdated = false;
+        const updatedCerts = [...trainer.certifications];
+
+        for (let i = 0; i < updatedCerts.length; i++) {
+          const cert = updatedCerts[i];
+          
+          let shouldTriggerExpiration = false;
+          let shouldTriggerRenewal = false;
+          let shouldTriggerExpected = false;
+
+          // 1. Expiration dates check
+          if (cert.expirationDate && !cert.isInProgress && !cert.expirationAlertSent) {
+            try {
+              const expDate = new Date(cert.expirationDate);
+              const diffTime = expDate.getTime() - today.getTime();
+              // Trigger if expiration is approaching within about 1 month
+              if (diffTime <= oneMonthMs) {
+                shouldTriggerExpiration = true;
+              }
+            } catch (e) {
+              console.error(e);
+            }
+          }
+
+          // 2. Renewal dates check
+          if (cert.renewalDate && !cert.isInProgress && !cert.renewalAlertSent) {
+            try {
+              const renewDate = new Date(cert.renewalDate);
+              const diffTime = renewDate.getTime() - today.getTime();
+              if (diffTime <= oneMonthMs) {
+                shouldTriggerRenewal = true;
+              }
+            } catch (e) {
+              console.error(e);
+            }
+          }
+
+          // 3. Expected completion dates check
+          if (cert.expectedCompletionDate && cert.isInProgress && !cert.expectedCompletionAlertSent) {
+            try {
+              const expCompDate = new Date(cert.expectedCompletionDate);
+              const diffTime = expCompDate.getTime() - today.getTime();
+              if (diffTime <= oneMonthMs) {
+                shouldTriggerExpected = true;
+              }
+            } catch (e) {
+              console.error(e);
+            }
+          }
+
+          if (shouldTriggerExpiration || shouldTriggerRenewal || shouldTriggerExpected) {
+            // Find recipients: location manager (admin of same location) + owner
+            const recipients = trainers.filter(t => 
+              (t.role === 'admin' && t.location === trainer.location) || 
+              t.role === 'owner'
+            );
+
+            let dateLabel = '';
+            let dateValue = '';
+
+            if (shouldTriggerExpiration) {
+              dateLabel = 'Expiration Date';
+              dateValue = cert.expirationDate;
+              updatedCerts[i] = { ...cert, expirationAlertSent: true };
+            } else if (shouldTriggerRenewal) {
+              dateLabel = 'Renewal Date';
+              dateValue = cert.renewalDate;
+              updatedCerts[i] = { ...cert, renewalAlertSent: true };
+            } else if (shouldTriggerExpected) {
+              dateLabel = 'Expected Completion Date';
+              dateValue = cert.expectedCompletionDate || '';
+              updatedCerts[i] = { ...cert, expectedCompletionAlertSent: true };
+            }
+
+            docUpdated = true;
+
+            // Send actual email via Firestore 'mail' collection to each recipient
+            for (const recipient of recipients) {
+              if (recipient.email) {
+                try {
+                  await addDoc(collection(db, 'mail'), {
+                    to: recipient.email,
+                    message: {
+                      subject: `⚠️ Certification Warning: ${trainer.name} - ${cert.name}`,
+                      html: `
+                        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+                          <div style="background-color: #ef4444; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                            <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
+                              ⚠️ Certification Coming Up
+                            </h2>
+                          </div>
+                          
+                          <p>Hi <strong>${recipient.name}</strong>,</p>
+                          <p>This is an automated alert notify you that a certification for <strong>${trainer.name}</strong> is approaching its key date in approximately one month or has already reached it.</p>
+                          
+                          <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                            <p style="margin: 0 0 10px 0;"><strong>Staff Member:</strong> ${trainer.name}</p>
+                            <p style="margin: 0 0 10px 0;"><strong>Location:</strong> ${trainer.location || 'N/A'}</p>
+                            <p style="margin: 0 0 10px 0;"><strong>Certification:</strong> ${cert.name}</p>
+                            <p style="margin: 0 0 10px 0; color: #b91c1c;"><strong>Approaching event:</strong> ${dateLabel}</p>
+                            <p style="margin: 0; font-size: 16px; font-weight: bold; color: #b91c1c;"><strong>Target Date:</strong> ${dateValue}</p>
+                          </div>
+                          
+                          <p>Please connect with ${trainer.name} to ensure training files are maintained and certificates are renewed on schedule.</p>
+                          
+                          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                          <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                        </div>
+                      `
+                    }
+                  });
+                } catch (e) {
+                  console.error("Failed to write alert email document", e);
+                }
+              }
+            }
+          }
+        }
+
+        if (docUpdated) {
+          try {
+            await updateDoc(doc(db, 'users', trainer.id), {
+              certifications: updatedCerts
+            });
+          } catch (e) {
+            console.error("Failed to update certifications alert flags in Firestore", e);
+          }
+        }
+      }
+    };
+
+    checkCerts();
+  }, [user, trainers, isAdmin]);
 
   // Fetch Resources from Firestore
   useEffect(() => {
@@ -554,6 +714,69 @@ function AppContent() {
     try {
       await updateDoc(doc(db, 'users', trainerId), { role, location });
       toast.success("Trainer info updated");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleAddCertification = async (trainerId: string, certName: string, expirationDate: string, renewalDate: string, isInProgress: boolean, expectedCompletionDate: string) => {
+    if (!user) return;
+    const canEdit = isAdmin || user.id === trainerId;
+    if (!canEdit) {
+      toast.error("You do not have permission to manage certifications for this trainer");
+      return;
+    }
+
+    if (!certName.trim()) {
+      toast.error("Certification name is required");
+      return;
+    }
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const currentCerts = trainer.certifications || [];
+      const newCert: Certification = {
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+        name: certName.trim(),
+        expirationDate: isInProgress ? '' : expirationDate,
+        renewalDate: isInProgress ? '' : renewalDate,
+        isInProgress,
+        expectedCompletionDate: isInProgress ? expectedCompletionDate : ''
+      };
+
+      const updatedCerts = [...currentCerts, newCert];
+      await updateDoc(doc(db, 'users', trainerId), {
+        certifications: updatedCerts
+      });
+      toast.success("Certification added successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleRemoveCertification = async (trainerId: string, certId: string) => {
+    if (!user) return;
+    const canEdit = isAdmin || user.id === trainerId;
+    if (!canEdit) {
+      toast.error("You do not have permission to manage certifications for this trainer");
+      return;
+    }
+
+    if (!window.confirm("Are you sure you want to remove this certification?")) return;
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const currentCerts = trainer.certifications || [];
+      const updatedCerts = currentCerts.filter(c => c.id !== certId);
+
+      await updateDoc(doc(db, 'users', trainerId), {
+        certifications: updatedCerts
+      });
+      toast.success("Certification removed");
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
     }
@@ -997,6 +1220,26 @@ function AppContent() {
     return <LoginPage />;
   }
 
+  const getCertStatus = (cert: Certification) => {
+    if (cert.isInProgress) return { label: 'In Progress', color: 'bg-blue-50 text-blue-700 border-blue-100' };
+    if (!cert.expirationDate) return { label: 'Active', color: 'bg-green-50 text-green-700 border-green-100' };
+    
+    try {
+      const expDate = new Date(cert.expirationDate);
+      const now = new Date();
+      if (expDate < now) {
+        return { label: 'Expired', color: 'bg-red-50 text-red-700 border-red-100' };
+      }
+      const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+      if (expDate.getTime() - now.getTime() < thirtyDays) {
+        return { label: 'Expiring Soon', color: 'bg-amber-50 text-amber-700 border-amber-100' };
+      }
+    } catch (e) {
+      // Ignored
+    }
+    return { label: 'Active', color: 'bg-green-50 text-green-700 border-green-100' };
+  };
+
   return (
     <div className="min-h-screen bg-[#F8F9FB] flex font-sans text-slate-900 border-t-4 border-transparent flex-col transition-all duration-500">
       {/* System Status Banner */}
@@ -1027,6 +1270,13 @@ function AppContent() {
           >
             <Users className="w-5 h-5" />
             <span>Team</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('staff')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'staff' ? 'bg-red-50 text-red-700 font-semibold' : 'text-slate-600 hover:bg-slate-50'}`}
+          >
+            <Award className="w-5 h-5" />
+            <span>Staff Info</span>
           </button>
           <button 
             onClick={() => setActiveTab('vacations')}
@@ -1075,6 +1325,7 @@ function AppContent() {
             <h2 className="text-3xl font-bold tracking-tight">
               {activeTab === 'tasks' && 'Administrative Tasks'}
               {activeTab === 'team' && 'Team Management'}
+              {activeTab === 'staff' && 'Staff Directory & Certifications'}
               {activeTab === 'inventory' && 'Inventory Management'}
               {activeTab === 'vacations' && 'Vacations & Time-off'}
               {activeTab === 'resources' && 'Team Resources'}
@@ -1082,6 +1333,7 @@ function AppContent() {
             <p className="text-slate-500 mt-1">
               {activeTab === 'tasks' && 'Assign and track progress of team operations.'}
               {activeTab === 'team' && 'Manage trainers and their roles within the team.'}
+              {activeTab === 'staff' && 'Track trainer qualifications, renewals, and progress.'}
               {activeTab === 'inventory' && 'Track equipment, retail items, and staff supplies.'}
               {activeTab === 'vacations' && 'Track approved and pending time-off requests.'}
               {activeTab === 'resources' && 'Quick access to frequently used Google Docs and links.'}
@@ -1887,6 +2139,376 @@ function AppContent() {
               )}
             </motion.div>
           )}
+
+          {activeTab === 'staff' && (
+            <motion.div 
+              key="staff"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="space-y-8"
+            >
+              {/* Stats Overview */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-y-4 md:gap-x-4">
+                <Card className="border-slate-200">
+                  <CardContent className="pt-6">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-sm font-medium text-slate-500">Total Team</p>
+                        <h4 className="text-3xl font-bold text-slate-900 mt-1">{trainers.length}</h4>
+                      </div>
+                      <div className="p-3 bg-red-50 text-red-600 rounded-xl">
+                        <Users className="w-6 h-6" />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-slate-200">
+                  <CardContent className="pt-6">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-sm font-medium text-slate-500">Active Certifications</p>
+                        <h4 className="text-3xl font-bold text-slate-900 mt-1">
+                          {trainers.reduce((acc, t) => acc + (t.certifications?.filter(c => !c.isInProgress).length || 0), 0)}
+                        </h4>
+                      </div>
+                      <div className="p-3 bg-green-50 text-green-600 rounded-xl">
+                        <Award className="w-6 h-6" />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-slate-200">
+                  <CardContent className="pt-6">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-sm font-medium text-slate-500">In Progress Certs</p>
+                        <h4 className="text-3xl font-bold text-slate-900 mt-1">
+                          {trainers.reduce((acc, t) => acc + (t.certifications?.filter(c => c.isInProgress).length || 0), 0)}
+                        </h4>
+                      </div>
+                      <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+                        <Clock className="w-6 h-6" />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Search Control */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row gap-3 shadow-sm justify-between items-center">
+                <div className="relative flex-1 w-full">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <Input 
+                    placeholder="Search by trainer name or certification (e.g., CPR, NASM)..." 
+                    className="pl-9 border-slate-200 max-w-lg"
+                    value={certSearchQuery}
+                    onChange={(e) => setCertSearchQuery(e.target.value)}
+                  />
+                </div>
+                <div className="shrink-0 text-xs text-slate-500 font-medium">
+                  Showing {trainers.filter(t => {
+                    const nameMatches = t.name.toLowerCase().includes(certSearchQuery.toLowerCase());
+                    const certMatches = t.certifications?.some(c => c.name.toLowerCase().includes(certSearchQuery.toLowerCase())) || false;
+                    return nameMatches || certMatches;
+                  }).length} of {trainers.length} staff members
+                </div>
+              </div>
+
+              {/* Staff and Certifications Accordion List */}
+              <div className="space-y-4">
+                {trainers
+                  .filter(trainer => {
+                    const nameMatches = trainer.name.toLowerCase().includes(certSearchQuery.toLowerCase());
+                    const certMatches = trainer.certifications?.some(cert => 
+                      cert.name.toLowerCase().includes(certSearchQuery.toLowerCase())
+                    ) || false;
+                    return nameMatches || certMatches;
+                  })
+                  .map((trainer) => {
+                    const isExpanded = expandedTrainerId === trainer.id;
+                    const trainerCerts = trainer.certifications || [];
+                    const activeCount = trainerCerts.filter(c => !c.isInProgress).length;
+                    const pendingCount = trainerCerts.filter(c => c.isInProgress).length;
+
+                    return (
+                      <Card key={trainer.id} className="border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-all duration-300">
+                        {/* Header Area */}
+                        <div className="p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white">
+                          <div className="flex items-center gap-4">
+                            {/* Clickable Icon/Avatar as requested */}
+                            <div 
+                              onClick={() => {
+                                setExpandedTrainerId(isExpanded ? null : trainer.id);
+                                setNewCertName('');
+                                setNewCertExpiration('');
+                                setNewCertRenewal('');
+                                setNewCertInProgress(false);
+                              }}
+                              className="relative cursor-pointer group shrink-0"
+                            >
+                              <Avatar className="w-16 h-16 ring-2 ring-transparent group-hover:ring-red-500 transition-all duration-300 transform group-hover:scale-105 shadow-md">
+                                <AvatarImage src={trainer.photoURL} />
+                                <AvatarFallback className="bg-red-50 text-red-700 text-xl font-bold">{trainer.name[0]}</AvatarFallback>
+                              </Avatar>
+                              <div className="absolute -bottom-1 -right-1 bg-slate-900 text-white p-1 rounded-full text-[10px] opacity-100 transition-opacity duration-200 shadow">
+                                <Award className="w-3 h-3" />
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-bold text-lg text-slate-900">{trainer.name}</h4>
+                                <Badge variant="outline" className={`capitalize ${trainer.role === 'admin' || trainer.role === 'owner' ? 'border-red-200 text-red-700 bg-red-50' : 'border-slate-200 text-slate-600'}`}>
+                                  {trainer.role}
+                                </Badge>
+                              </div>
+                              <p className="text-sm text-slate-500 flex items-center gap-1">
+                                <Mail className="w-3.5 h-3.5" /> {trainer.email}
+                              </p>
+                              <div className="flex flex-wrap gap-2 pt-1">
+                                {trainer.location && (
+                                  <Badge variant="secondary" className="bg-blue-50 text-blue-700 hover:bg-blue-50 flex items-center gap-1 text-xs">
+                                    <MapPin className="w-3 h-3" />
+                                    {trainer.location}
+                                  </Badge>
+                                )}
+                                <Badge variant="outline" className="text-slate-500 flex items-center gap-1 text-xs">
+                                  <Award className="w-3 h-3 text-amber-500" />
+                                  {activeCount} Cert{activeCount !== 1 ? 's' : ''}
+                                </Badge>
+                                {pendingCount > 0 && (
+                                  <Badge variant="outline" className="text-blue-500 border-blue-200 flex items-center gap-1 text-xs bg-blue-50/35">
+                                    <Clock className="w-3 h-3" />
+                                    {pendingCount} In Progress
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Button 
+                              variant="outline" 
+                              onClick={() => {
+                                setExpandedTrainerId(isExpanded ? null : trainer.id);
+                                setNewCertName('');
+                                setNewCertExpiration('');
+                                setNewCertRenewal('');
+                                setNewCertInProgress(false);
+                              }}
+                              className="gap-2 border-slate-200 font-medium"
+                            >
+                              <span>{isExpanded ? 'Hide Certs' : 'Manage Certs'}</span>
+                              <ChevronRight className={`w-4 h-4 transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                            </Button>
+                          </div>
+                        </div>
+
+                        {/* Collapsible Dropdown Area for Certifications */}
+                        <AnimatePresence initial={false}>
+                          {isExpanded && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.3, ease: 'easeInOut' }}
+                              className="border-t border-slate-100 bg-slate-50/50"
+                            >
+                              <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+                                {/* Left Side: List of Certifications */}
+                                <div className="lg:col-span-8 space-y-4">
+                                  <h5 className="font-bold text-slate-900 flex items-center gap-2">
+                                    <Award className="w-4 h-4 text-red-600" />
+                                    Earned & Planned Certifications
+                                  </h5>
+
+                                  {trainerCerts.length === 0 ? (
+                                    <div className="border border-dashed border-slate-200 rounded-xl p-8 text-center bg-white space-y-2">
+                                      <p className="text-sm text-slate-500">No certifications logged for {trainer.name}.</p>
+                                      {(isAdmin || user.id === trainer.id) && (
+                                        <p className="text-xs text-slate-400">Add a certification using the form on the right.</p>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="overflow-hidden bg-white border border-slate-200 rounded-xl">
+                                      <Table>
+                                        <TableHeader>
+                                          <TableRow className="bg-slate-50">
+                                            <TableHead>Certification Name</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead>Expiration Date</TableHead>
+                                            <TableHead>Renewal Date</TableHead>
+                                            <TableHead className="text-right w-[80px]">Actions</TableHead>
+                                          </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                          {trainerCerts.map((cert) => {
+                                            const status = getCertStatus(cert);
+                                            return (
+                                              <TableRow key={cert.id} className="hover:bg-slate-50/50">
+                                                <TableCell className="font-bold text-slate-900">{cert.name}</TableCell>
+                                                <TableCell>
+                                                  <Badge variant="outline" className={`${status.color} font-medium`}>
+                                                    {status.label}
+                                                  </Badge>
+                                                </TableCell>
+                                                <TableCell className="text-sm text-slate-500">
+                                                  {cert.isInProgress ? (
+                                                    cert.expectedCompletionDate ? (
+                                                      <span className="text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+                                                        Expected: {cert.expectedCompletionDate}
+                                                      </span>
+                                                    ) : (
+                                                      <span className="text-slate-400 font-medium">In Progress</span>
+                                                    )
+                                                  ) : (
+                                                    cert.expirationDate || 'N/A'
+                                                  )}
+                                                </TableCell>
+                                                <TableCell className="text-sm text-slate-500">
+                                                  {cert.isInProgress ? <span className="text-slate-400">-</span> : (cert.renewalDate || 'N/A')}
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                  {(isAdmin || user.id === trainer.id) ? (
+                                                    <Button 
+                                                      variant="ghost" 
+                                                      size="sm" 
+                                                      onClick={() => handleRemoveCertification(trainer.id, cert.id)}
+                                                      className="text-slate-400 hover:text-red-600 h-8 w-8 p-0"
+                                                    >
+                                                      <Trash2 className="w-4 h-4" />
+                                                    </Button>
+                                                  ) : (
+                                                    <span className="text-xs text-slate-400 italic">Auth Only</span>
+                                                  )}
+                                                </TableCell>
+                                              </TableRow>
+                                            );
+                                          })}
+                                        </TableBody>
+                                      </Table>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Right Side: Add New Certification Form */}
+                                <div className="lg:col-span-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                                  <div>
+                                    <h5 className="font-bold text-slate-900 mb-1">Add New Certification</h5>
+                                    <p className="text-xs text-slate-500 mb-4">Log active or planned qualifications.</p>
+                                    
+                                    {(isAdmin || user.id === trainer.id) ? (
+                                      <div className="space-y-4">
+                                        <div className="space-y-1.5">
+                                          <Label htmlFor="cert-name" className="text-xs font-semibold text-slate-700">Certification Name</Label>
+                                          <Input 
+                                            id="cert-name" 
+                                            placeholder="e.g., CPR/AED, NASM CPT" 
+                                            value={newCertName}
+                                            onChange={(e) => setNewCertName(e.target.value)}
+                                            className="h-9 border-slate-200"
+                                          />
+                                        </div>
+
+                                        <div className="flex items-center space-x-2 pt-1 pb-1">
+                                          <Checkbox 
+                                            id="cert-progress" 
+                                            checked={newCertInProgress}
+                                            onCheckedChange={(checked) => {
+                                               setNewCertInProgress(!!checked);
+                                               if (!checked) setNewCertExpectedCompletion('');
+                                             }}
+                                          />
+                                          <Label htmlFor="cert-progress" className="text-xs font-medium text-slate-700 cursor-pointer select-none">
+                                            Currently in progress/working on
+                                          </Label>
+                                        </div>
+
+                                        {newCertInProgress && (
+                                           <motion.div 
+                                             initial={{ opacity: 0, height: 0 }}
+                                             animate={{ opacity: 1, height: 'auto' }}
+                                             exit={{ opacity: 0, height: 0 }}
+                                             transition={{ duration: 0.2 }}
+                                             className="space-y-1.5 p-3 rounded-lg border border-amber-100 bg-amber-50/30 mb-3"
+                                           >
+                                             <Label htmlFor="cert-expected" className="text-xs font-bold text-amber-805 text-amber-805 text-amber-800 flex items-center gap-1.5">
+                                               <Clock className="w-3.5 h-3.5 text-amber-500 animate-pulse" /> Expected Completion Date
+                                             </Label>
+                                             <Input 
+                                               id="cert-expected" 
+                                               type="date"
+                                               value={newCertExpectedCompletion}
+                                               onChange={(e) => setNewCertExpectedCompletion(e.target.value)}
+                                               className="h-9 border-amber-200 bg-white text-xs text-slate-800 focus-visible:ring-amber-500"
+                                             />
+                                           </motion.div>
+                                         )}
+
+                                         {!newCertInProgress && (
+                                          <div className="grid grid-cols-2 gap-3">
+                                            <div className="space-y-1.5">
+                                              <Label htmlFor="cert-exp" className="text-xs font-semibold text-slate-700">Expiration Date</Label>
+                                              <Input 
+                                                id="cert-exp" 
+                                                type="date"
+                                                value={newCertExpiration}
+                                                onChange={(e) => setNewCertExpiration(e.target.value)}
+                                                className="h-9 border-slate-200 text-xs"
+                                              />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                              <Label htmlFor="cert-renew" className="text-xs font-semibold text-slate-700">Renewal Date</Label>
+                                              <Input 
+                                                id="cert-renew" 
+                                                type="date"
+                                                value={newCertRenewal}
+                                                onChange={(e) => setNewCertRenewal(e.target.value)}
+                                                className="h-9 border-slate-200 text-xs"
+                                              />
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg text-center">
+                                        <p className="text-xs font-medium text-slate-500">Only {trainer.name} or an Admin can manage their certifications.</p>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {(isAdmin || user.id === trainer.id) && (
+                                    <div className="pt-4 border-t border-slate-100 mt-4">
+                                      <Button 
+                                        className="w-full bg-red-600 hover:bg-red-700 h-9 text-xs font-medium text-white shadow-sm"
+                                        onClick={() => {
+                                          handleAddCertification(trainer.id, newCertName, newCertExpiration, newCertRenewal, newCertInProgress, newCertExpectedCompletion);
+                                          setNewCertName('');
+                                          setNewCertExpiration('');
+                                          setNewCertRenewal('');
+                                          setNewCertInProgress(false);
+                                          setNewCertExpectedCompletion('');
+                                        }}
+                                      >
+                                        Add to Profile
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </Card>
+                    );
+                  })}
+              </div>
+            </motion.div>
+          )}
+
           {activeTab === 'vacations' && (
             <Tabs defaultValue="calendar" className="w-full">
               <motion.div 

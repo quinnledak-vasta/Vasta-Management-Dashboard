@@ -66,7 +66,8 @@ service cloud.firestore {
              data.email is string &&
              data.role in ['admin', 'trainer', 'owner'] &&
              (data.location == null || data.location in ['Dorset Street', 'Shelburne Road', 'West Palm Beach']) &&
-             (data.photoURL == null || data.photoURL is string);
+             (data.photoURL == null || data.photoURL is string) &&
+             (data.get('certifications', null) == null || data.certifications is list);
     }
 
     function isValidInvite(data) {

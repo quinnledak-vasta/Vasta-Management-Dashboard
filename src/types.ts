@@ -56,6 +56,18 @@ export interface Task {
   questions?: TaskQuestion[];
 }
 
+export interface Certification {
+  id: string;
+  name: string;
+  expirationDate: string;
+  renewalDate: string;
+  isInProgress: boolean;
+  expectedCompletionDate?: string;
+  expirationAlertSent?: boolean;
+  renewalAlertSent?: boolean;
+  expectedCompletionAlertSent?: boolean;
+}
+
 export interface Trainer {
   id: string;
   name: string;
@@ -63,6 +75,7 @@ export interface Trainer {
   role: UserRole;
   location?: Location;
   photoURL?: string;
+  certifications?: Certification[];
 }
 
 export interface Alert {
