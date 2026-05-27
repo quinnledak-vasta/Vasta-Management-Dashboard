@@ -38,7 +38,11 @@ import {
   ExternalLink,
   MapPin,
   FileText,
-  Award
+  Award,
+  ClipboardList,
+  History,
+  Cake,
+  Briefcase
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
@@ -125,7 +129,8 @@ import {
   InventoryReport,
   InventoryReportItem,
   Resource,
-  Certification
+  Certification,
+  StaffCheckIn
 } from './types';
 import { GoogleGenAI } from "@google/genai";
 
@@ -207,11 +212,23 @@ function AppContent() {
   const [activeTab, setActiveTab] = useState('tasks');
   const [certSearchQuery, setCertSearchQuery] = useState('');
   const [expandedTrainerId, setExpandedTrainerId] = useState<string | null>(null);
+  const [expandedCheckInTrainerId, setExpandedCheckInTrainerId] = useState<string | null>(null);
+  const [checkInQuarter, setCheckInQuarter] = useState('Q2 2026');
+  const [checkInDate, setCheckInDate] = useState(new Date().toISOString().split('T')[0]);
+  const [checkInListen360Score, setCheckInListen360Score] = useState('');
+  const [checkInRetentionRate, setCheckInRetentionRate] = useState('');
+  const [checkInReferralsCollected, setCheckInReferralsCollected] = useState('');
+  const [checkInSoapNotes, setCheckInSoapNotes] = useState('');
+  const [checkInProgrammingNotes, setCheckInProgrammingNotes] = useState('');
+  const [checkInBrainstormingFuture, setCheckInBrainstormingFuture] = useState('');
+  const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
   const [newCertName, setNewCertName] = useState('');
   const [newCertExpiration, setNewCertExpiration] = useState('');
   const [newCertRenewal, setNewCertRenewal] = useState('');
   const [newCertInProgress, setNewCertInProgress] = useState(false);
   const [newCertExpectedCompletion, setNewCertExpectedCompletion] = useState('');
+  const [editBirthday, setEditBirthday] = useState('');
+  const [editWorkAnniversary, setEditWorkAnniversary] = useState('');
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
@@ -784,6 +801,108 @@ function AppContent() {
         certifications: updatedCerts
       });
       toast.success("Certification removed");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleUpdateTrainerDates = async (trainerId: string, birthday: string, workAnniversary: string) => {
+    if (!user) return;
+    const canEdit = isAdmin || user.id === trainerId;
+    if (!canEdit) {
+      toast.error("You do not have permission to manage info for this trainer");
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'users', trainerId), {
+        birthday: birthday || '',
+        workAnniversary: workAnniversary || ''
+      });
+      toast.success("Staff profile details updated successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleAddCheckIn = async (trainerId: string) => {
+    if (!user) return;
+    const canEdit = isAdmin || user.id === trainerId;
+    if (!canEdit) {
+      toast.error("You do not have permission to manage check-ins for this trainer");
+      return;
+    }
+
+    if (!checkInQuarter.trim()) {
+      toast.error("Quarter selection is required");
+      return;
+    }
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const currentCheckIns = trainer.checkIns || [];
+      const newCheckIn: StaffCheckIn = {
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+        quarter: checkInQuarter,
+        checkInDate: checkInDate,
+        listen360Score: checkInListen360Score.trim(),
+        retentionRate: checkInRetentionRate.trim(),
+        referralsCollected: checkInReferralsCollected.trim(),
+        soapNotes: checkInSoapNotes.trim(),
+        programmingNotes: checkInProgrammingNotes.trim(),
+        brainstormingFuture: checkInBrainstormingFuture.trim(),
+        createdAt: new Date().toISOString(),
+        createdBy: user.id,
+        createdByName: user.name || 'Unknown'
+      };
+
+      const updatedCheckIns = [...currentCheckIns, newCheckIn];
+      await updateDoc(doc(db, 'users', trainerId), {
+        checkIns: updatedCheckIns
+      });
+      toast.success("Quarterly check-in submitted successfully!");
+      
+      // Reset form states
+      setCheckInDate(new Date().toISOString().split('T')[0]);
+      setCheckInListen360Score('');
+      setCheckInRetentionRate('');
+      setCheckInReferralsCollected('');
+      setCheckInSoapNotes('');
+      setCheckInProgrammingNotes('');
+      setCheckInBrainstormingFuture('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleRemoveCheckIn = async (trainerId: string, checkInId: string) => {
+    if (!user) return;
+    const canEdit = isAdmin || user.id === trainerId;
+    if (!canEdit) {
+      toast.error("You do not have permission to delete check-ins for this trainer");
+      return;
+    }
+
+    if (!window.confirm("Are you sure you want to delete this quarterly check-in?")) {
+      return;
+    }
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const currentCheckIns = trainer.checkIns || [];
+      const updatedCheckIns = currentCheckIns.filter(ci => ci.id !== checkInId);
+
+      await updateDoc(doc(db, 'users', trainerId), {
+        checkIns: updatedCheckIns
+      });
+      toast.success("Quarterly check-in deleted");
+      if (selectedReviewId === checkInId) {
+        setSelectedReviewId(null);
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
     }
@@ -2292,7 +2411,25 @@ function AppContent() {
                               </Avatar>
                               <div>
                                 <p className="font-bold text-slate-900">{trainer.name}</p>
-                                <p className="text-xs text-slate-500">ID: {trainer.id}</p>
+                                <p className="text-xs text-slate-500 mb-1">ID: {trainer.id}</p>
+                                <div className="flex flex-col gap-1 mt-1">
+                                  {trainer.birthday && (
+                                    <span className="text-[10px] text-pink-600 bg-pink-50 border border-pink-100 rounded px-1.5 py-0.5 flex items-center gap-1 w-fit">
+                                      <Cake className="w-3 h-3 text-pink-500" />
+                                      Born: {(() => {
+                                        try { return new Date(trainer.birthday + 'T00:00:00').toLocaleDateString(undefined, {month: 'short', day: 'numeric', timeZone: 'UTC'}); } catch { return trainer.birthday; }
+                                      })()}
+                                    </span>
+                                  )}
+                                  {trainer.workAnniversary && (
+                                    <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded px-1.5 py-0.5 flex items-center gap-1 w-fit font-semibold">
+                                      <Briefcase className="w-3 h-3 text-emerald-500" />
+                                      Started: {(() => {
+                                        try { return new Date(trainer.workAnniversary + 'T00:00:00').toLocaleDateString(undefined, {year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'}); } catch { return trainer.workAnniversary; }
+                                      })()}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </TableCell>
@@ -2540,7 +2677,12 @@ function AppContent() {
                             {/* Clickable Icon/Avatar as requested */}
                             <div 
                               onClick={() => {
-                                setExpandedTrainerId(isExpanded ? null : trainer.id);
+                                const nextState = isExpanded ? null : trainer.id;
+                                setExpandedTrainerId(nextState);
+                                if (nextState) {
+                                  setEditBirthday(trainer.birthday || '');
+                                  setEditWorkAnniversary(trainer.workAnniversary || '');
+                                }
                                 setNewCertName('');
                                 setNewCertExpiration('');
                                 setNewCertRenewal('');
@@ -2574,6 +2716,22 @@ function AppContent() {
                                     {trainer.location}
                                   </Badge>
                                 )}
+                                {trainer.birthday && (
+                                  <Badge variant="outline" className="text-pink-600 border-pink-100 flex items-center gap-1 text-xs bg-pink-50/20">
+                                    <Cake className="w-3.5 h-3.5 text-pink-500" />
+                                    Born: {(() => {
+                                      try { return new Date(trainer.birthday + 'T00:00:00').toLocaleDateString(undefined, {month: 'short', day: 'numeric', timeZone: 'UTC'}); } catch { return trainer.birthday; }
+                                    })()}
+                                  </Badge>
+                                )}
+                                {trainer.workAnniversary && (
+                                  <Badge variant="outline" className="text-emerald-700 border-emerald-100 flex items-center gap-1 text-xs bg-emerald-50/25">
+                                    <Briefcase className="w-3.5 h-3.5 text-emerald-500" />
+                                    Started: {(() => {
+                                      try { return new Date(trainer.workAnniversary + 'T00:00:00').toLocaleDateString(undefined, {year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'}); } catch { return trainer.workAnniversary; }
+                                    })()}
+                                  </Badge>
+                                )}
                                 <Badge variant="outline" className="text-slate-500 flex items-center gap-1 text-xs">
                                   <Award className="w-3 h-3 text-amber-500" />
                                   {activeCount} Cert{activeCount !== 1 ? 's' : ''}
@@ -2589,10 +2747,37 @@ function AppContent() {
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
+                            {(isAdmin || user?.id === trainer.id) && (
+                              <Button 
+                                variant="outline" 
+                                onClick={() => {
+                                  const alreadyOpen = expandedCheckInTrainerId === trainer.id;
+                                  setExpandedCheckInTrainerId(alreadyOpen ? null : trainer.id);
+                                  setExpandedTrainerId(null);
+                                  setSelectedReviewId(null);
+                                }}
+                                className={`gap-2 border-slate-200 font-medium ${expandedCheckInTrainerId === trainer.id ? 'bg-red-50 text-red-750 border-red-100' : ''}`}
+                              >
+                                <ClipboardList className="w-4 h-4 text-red-650" />
+                                <span>{expandedCheckInTrainerId === trainer.id ? 'Hide Check-Ins' : 'Staff Check-Ins'}</span>
+                                {trainer.checkIns && trainer.checkIns.length > 0 && (
+                                  <Badge className="bg-red-600 text-white hover:bg-red-700 text-[10px] px-1.5 py-0 h-4 min-w-4 flex items-center justify-center rounded-full">
+                                    {trainer.checkIns.length}
+                                  </Badge>
+                                )}
+                              </Button>
+                            )}
+
                             <Button 
                               variant="outline" 
                               onClick={() => {
-                                setExpandedTrainerId(isExpanded ? null : trainer.id);
+                                const nextState = isExpanded ? null : trainer.id;
+                                setExpandedTrainerId(nextState);
+                                if (nextState) {
+                                  setEditBirthday(trainer.birthday || '');
+                                  setEditWorkAnniversary(trainer.workAnniversary || '');
+                                }
+                                setExpandedCheckInTrainerId(null);
                                 setNewCertName('');
                                 setNewCertExpiration('');
                                 setNewCertRenewal('');
@@ -2693,107 +2878,490 @@ function AppContent() {
                                   )}
                                 </div>
 
-                                {/* Right Side: Add New Certification Form */}
-                                <div className="lg:col-span-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                                  <div>
-                                    <h5 className="font-bold text-slate-900 mb-1">Add New Certification</h5>
-                                    <p className="text-xs text-slate-500 mb-4">Log active or planned qualifications.</p>
-                                    
-                                    {(isAdmin || user.id === trainer.id) ? (
-                                      <div className="space-y-4">
-                                        <div className="space-y-1.5">
-                                          <Label htmlFor="cert-name" className="text-xs font-semibold text-slate-700">Certification Name</Label>
-                                          <Input 
-                                            id="cert-name" 
-                                            placeholder="e.g., CPR/AED, NASM CPT" 
-                                            value={newCertName}
-                                            onChange={(e) => setNewCertName(e.target.value)}
-                                            className="h-9 border-slate-200"
-                                          />
-                                        </div>
-
-                                        <div className="flex items-center space-x-2 pt-1 pb-1">
-                                          <Checkbox 
-                                            id="cert-progress" 
-                                            checked={newCertInProgress}
-                                            onCheckedChange={(checked) => {
-                                               setNewCertInProgress(!!checked);
-                                               if (!checked) setNewCertExpectedCompletion('');
-                                             }}
-                                          />
-                                          <Label htmlFor="cert-progress" className="text-xs font-medium text-slate-700 cursor-pointer select-none">
-                                            Currently in progress/working on
-                                          </Label>
-                                        </div>
-
-                                        {newCertInProgress && (
-                                           <motion.div 
-                                             initial={{ opacity: 0, height: 0 }}
-                                             animate={{ opacity: 1, height: 'auto' }}
-                                             exit={{ opacity: 0, height: 0 }}
-                                             transition={{ duration: 0.2 }}
-                                             className="space-y-1.5 p-3 rounded-lg border border-amber-100 bg-amber-50/30 mb-3"
-                                           >
-                                             <Label htmlFor="cert-expected" className="text-xs font-bold text-amber-805 text-amber-805 text-amber-800 flex items-center gap-1.5">
-                                               <Clock className="w-3.5 h-3.5 text-amber-500 animate-pulse" /> Expected Completion Date
-                                             </Label>
-                                             <Input 
-                                               id="cert-expected" 
-                                               type="date"
-                                               value={newCertExpectedCompletion}
-                                               onChange={(e) => setNewCertExpectedCompletion(e.target.value)}
-                                               className="h-9 border-amber-200 bg-white text-xs text-slate-800 focus-visible:ring-amber-500"
-                                             />
-                                           </motion.div>
-                                         )}
-
-                                         {!newCertInProgress && (
-                                          <div className="grid grid-cols-2 gap-3">
-                                            <div className="space-y-1.5">
-                                              <Label htmlFor="cert-exp" className="text-xs font-semibold text-slate-700">Expiration Date</Label>
-                                              <Input 
-                                                id="cert-exp" 
-                                                type="date"
-                                                value={newCertExpiration}
-                                                onChange={(e) => setNewCertExpiration(e.target.value)}
-                                                className="h-9 border-slate-200 text-xs"
-                                              />
-                                            </div>
-                                            <div className="space-y-1.5">
-                                              <Label htmlFor="cert-renew" className="text-xs font-semibold text-slate-700">Renewal Date</Label>
-                                              <Input 
-                                                id="cert-renew" 
-                                                type="date"
-                                                value={newCertRenewal}
-                                                onChange={(e) => setNewCertRenewal(e.target.value)}
-                                                className="h-9 border-slate-200 text-xs"
-                                              />
-                                            </div>
+                                {/* Right Side: Forms and Side Panels */}
+                                <div className="lg:col-span-4 space-y-6">
+                                  {/* Add New Certification Form */}
+                                  <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                                    <div>
+                                      <h5 className="font-bold text-slate-900 mb-1">Add New Certification</h5>
+                                      <p className="text-xs text-slate-500 mb-4">Log active or planned qualifications.</p>
+                                      
+                                      {(isAdmin || user.id === trainer.id) ? (
+                                        <div className="space-y-4">
+                                          <div className="space-y-1.5">
+                                            <Label htmlFor="cert-name" className="text-xs font-semibold text-slate-700">Certification Name</Label>
+                                            <Input 
+                                              id="cert-name" 
+                                              placeholder="e.g., CPR/AED, NASM CPT" 
+                                              value={newCertName}
+                                              onChange={(e) => setNewCertName(e.target.value)}
+                                              className="h-9 border-slate-200"
+                                            />
                                           </div>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg text-center">
-                                        <p className="text-xs font-medium text-slate-500">Only {trainer.name} or an Admin can manage their certifications.</p>
+
+                                          <div className="flex items-center space-x-2 pt-1 pb-1">
+                                            <Checkbox 
+                                              id="cert-progress" 
+                                              checked={newCertInProgress}
+                                              onCheckedChange={(checked) => {
+                                                 setNewCertInProgress(!!checked);
+                                                 if (!checked) setNewCertExpectedCompletion('');
+                                               }}
+                                            />
+                                            <Label htmlFor="cert-progress" className="text-xs font-medium text-slate-700 cursor-pointer select-none">
+                                              Currently in progress/working on
+                                            </Label>
+                                          </div>
+
+                                          {newCertInProgress && (
+                                             <motion.div 
+                                               initial={{ opacity: 0, height: 0 }}
+                                               animate={{ opacity: 1, height: 'auto' }}
+                                               exit={{ opacity: 0, height: 0 }}
+                                               transition={{ duration: 0.2 }}
+                                               className="space-y-1.5 p-3 rounded-lg border border-amber-100 bg-amber-50/30 mb-3"
+                                             >
+                                               <Label htmlFor="cert-expected" className="text-xs font-bold text-amber-800 flex items-center gap-1.5">
+                                                 <Clock className="w-3.5 h-3.5 text-amber-500 animate-pulse" /> Expected Completion Date
+                                               </Label>
+                                               <Input 
+                                                 id="cert-expected" 
+                                                 type="date"
+                                                 value={newCertExpectedCompletion}
+                                                 onChange={(e) => setNewCertExpectedCompletion(e.target.value)}
+                                                 className="h-9 border-amber-200 bg-white text-xs text-slate-800 focus-visible:ring-amber-500"
+                                               />
+                                             </motion.div>
+                                           )}
+
+                                           {!newCertInProgress && (
+                                            <div className="grid grid-cols-2 gap-3">
+                                              <div className="space-y-1.5">
+                                                <Label htmlFor="cert-exp" className="text-xs font-semibold text-slate-700">Expiration Date</Label>
+                                                <Input 
+                                                  id="cert-exp" 
+                                                  type="date"
+                                                  value={newCertExpiration}
+                                                  onChange={(e) => setNewCertExpiration(e.target.value)}
+                                                  className="h-9 border-slate-200 text-xs"
+                                                />
+                                              </div>
+                                              <div className="space-y-1.5">
+                                                <Label htmlFor="cert-renew" className="text-xs font-semibold text-slate-700">Renewal Date</Label>
+                                                <Input 
+                                                  id="cert-renew" 
+                                                  type="date"
+                                                  value={newCertRenewal}
+                                                  onChange={(e) => setNewCertRenewal(e.target.value)}
+                                                  className="h-9 border-slate-200 text-xs"
+                                                />
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg text-center">
+                                          <p className="text-xs font-medium text-slate-500">Only {trainer.name} or an Admin can manage their certifications.</p>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {(isAdmin || user.id === trainer.id) && (
+                                      <div className="pt-4 border-t border-slate-100 mt-4">
+                                        <Button 
+                                          className="w-full bg-red-600 hover:bg-red-700 h-9 text-xs font-medium text-white shadow-sm"
+                                          onClick={() => {
+                                            handleAddCertification(trainer.id, newCertName, newCertExpiration, newCertRenewal, newCertInProgress, newCertExpectedCompletion);
+                                            setNewCertName('');
+                                            setNewCertExpiration('');
+                                            setNewCertRenewal('');
+                                            setNewCertInProgress(false);
+                                            setNewCertExpectedCompletion('');
+                                          }}
+                                        >
+                                          Add to Profile
+                                        </Button>
                                       </div>
                                     )}
                                   </div>
 
-                                  {(isAdmin || user.id === trainer.id) && (
-                                    <div className="pt-4 border-t border-slate-100 mt-4">
-                                      <Button 
-                                        className="w-full bg-red-600 hover:bg-red-700 h-9 text-xs font-medium text-white shadow-sm"
-                                        onClick={() => {
-                                          handleAddCertification(trainer.id, newCertName, newCertExpiration, newCertRenewal, newCertInProgress, newCertExpectedCompletion);
-                                          setNewCertName('');
-                                          setNewCertExpiration('');
-                                          setNewCertRenewal('');
-                                          setNewCertInProgress(false);
-                                          setNewCertExpectedCompletion('');
-                                        }}
-                                      >
-                                        Add to Profile
-                                      </Button>
+                                  {/* Staff Dates Form (Birthday and Work Anniversary) */}
+                                  {(isAdmin || user.id === trainer.id) ? (
+                                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                                      <h5 className="font-bold text-slate-900 mb-1 flex items-center gap-1.5 text-sm">
+                                        <Cake className="w-4 h-4 text-pink-500" />
+                                        Staff Profile Dates
+                                      </h5>
+                                      <p className="text-xs text-slate-500 mb-4">Manage key dates for this staff member.</p>
+                                      
+                                      <div className="space-y-4">
+                                        <div className="space-y-1.5">
+                                          <Label htmlFor={`birthday-${trainer.id}`} className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                                            <Cake className="w-3.5 h-3.5 text-pink-500" />
+                                            Birthday
+                                          </Label>
+                                          <Input
+                                            id={`birthday-${trainer.id}`}
+                                            type="date"
+                                            value={editBirthday}
+                                            onChange={(e) => setEditBirthday(e.target.value)}
+                                            className="h-9 border-slate-200 text-xs"
+                                          />
+                                        </div>
+
+                                        <div className="space-y-1.5">
+                                          <Label htmlFor={`anniversary-${trainer.id}`} className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                                            <Briefcase className="w-3.5 h-3.5 text-emerald-500" />
+                                            Work Anniversary
+                                          </Label>
+                                          <Input
+                                            id={`anniversary-${trainer.id}`}
+                                            type="date"
+                                            value={editWorkAnniversary}
+                                            onChange={(e) => setEditWorkAnniversary(e.target.value)}
+                                            className="h-9 border-slate-200 text-xs"
+                                          />
+                                        </div>
+
+                                        <Button
+                                          className="w-full bg-slate-900 hover:bg-slate-800 h-9 text-xs font-medium text-white shadow-sm mt-2"
+                                          onClick={() => {
+                                            handleUpdateTrainerDates(trainer.id, editBirthday, editWorkAnniversary);
+                                          }}
+                                        >
+                                          Save Staff Dates
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm text-center">
+                                      <h5 className="font-bold text-slate-900 mb-1 flex items-center justify-center gap-1.5 text-sm">
+                                        <Cake className="w-4 h-4 text-slate-400" />
+                                        Staff Dates
+                                      </h5>
+                                      <div className="space-y-2.5 mt-3 text-left">
+                                        <div className="flex justify-between items-center text-xs border-b pb-1.5">
+                                          <span className="text-slate-500">Birthday:</span>
+                                          <span className="font-semibold text-slate-800">
+                                            {trainer.birthday ? (
+                                              new Date(trainer.birthday + 'T00:00:00').toLocaleDateString(undefined, {month: 'long', day: 'numeric', timeZone: 'UTC'})
+                                            ) : (
+                                              'Not set'
+                                            )}
+                                          </span>
+                                        </div>
+                                        <div className="flex justify-between items-center text-xs">
+                                          <span className="text-slate-500">Work Anniversary:</span>
+                                          <span className="font-semibold text-slate-800">
+                                            {trainer.workAnniversary ? (
+                                              new Date(trainer.workAnniversary + 'T00:00:00').toLocaleDateString(undefined, {year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'})
+                                            ) : (
+                                              'Not set'
+                                            )}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+
+                        {/* Collapsible Dropdown Area for Staff Check-Ins */}
+                        <AnimatePresence initial={false}>
+                          {(expandedCheckInTrainerId === trainer.id && (isAdmin || user?.id === trainer.id)) && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.3, ease: 'easeInOut' }}
+                              className="border-t border-slate-100 bg-red-50/5"
+                            >
+                              <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 bg-slate-50/40">
+                                {/* Left Column: Previous Reviews Menu */}
+                                <div className="lg:col-span-4 space-y-4">
+                                  <h5 className="font-bold text-slate-800 flex items-center gap-2 text-xs border-b pb-2 uppercase tracking-wide">
+                                    <History className="w-4 h-4 text-red-600" />
+                                    Previous Reviews
+                                  </h5>
+
+                                  {(!trainer.checkIns || trainer.checkIns.length === 0) ? (
+                                    <div className="border border-dashed border-slate-200 rounded-xl p-6 text-center bg-white">
+                                      <p className="text-xs text-slate-500 font-medium">No previous reviews logged.</p>
+                                      <p className="text-[11px] text-slate-400 mt-1">First complete a check-in on the right.</p>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+                                      {trainer.checkIns.map((ci) => {
+                                        const isSelected = selectedReviewId === ci.id;
+                                        return (
+                                          <div 
+                                            key={ci.id}
+                                            onClick={() => setSelectedReviewId(isSelected ? null : ci.id)}
+                                            className={`p-3 rounded-xl border text-left cursor-pointer transition-all duration-200 ${
+                                              isSelected 
+                                                ? 'bg-red-50/50 border-red-200 shadow-sm' 
+                                                : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+                                            }`}
+                                          >
+                                            <div className="flex justify-between items-start gap-2">
+                                              <div>
+                                                <Badge className="bg-slate-900 text-white font-bold text-[10px] px-1.5 py-0 h-4 rounded">
+                                                  {ci.quarter}
+                                                </Badge>
+                                                <p className="text-[10px] text-slate-400 font-medium mt-1.5">
+                                                  Date: {ci.checkInDate ? new Date(ci.checkInDate + 'T00:00:00').toLocaleDateString() : new Date(ci.createdAt).toLocaleDateString()}
+                                                </p>
+                                                <p className="text-[10px] text-slate-400 font-medium leading-none mt-1">
+                                                  By: {ci.createdByName}
+                                                </p>
+                                              </div>
+                                              <div className="text-right">
+                                                {ci.listen360Score && (
+                                                  <p className="text-[11px] font-semibold text-slate-700">Listen360: <span className="font-bold text-red-600">{ci.listen360Score}</span></p>
+                                                )}
+                                                {ci.retentionRate && (
+                                                  <p className="text-[11px] font-semibold text-slate-700">Retention: <span className="font-bold text-blue-600">{ci.retentionRate}</span></p>
+                                                )}
+                                              </div>
+                                            </div>
+                                            
+                                            <div className="flex justify-between items-center mt-3 pt-2 border-t border-dashed border-slate-100">
+                                              <span className="text-[11px] text-red-600 hover:underline inline-flex items-center gap-0.5 font-semibold">
+                                                {isSelected ? 'Collapse' : 'View full details →'}
+                                              </span>
+                                              <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleRemoveCheckIn(trainer.id, ci.id);
+                                                }}
+                                                className="h-6 w-6 p-0 text-slate-400 hover:text-red-600 rounded-md"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Right Column: Active Form or Selected Review Details */}
+                                <div className="lg:col-span-8 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                                  {selectedReviewId ? (
+                                    (() => {
+                                      const ci = trainer.checkIns?.find(item => item.id === selectedReviewId);
+                                      if (!ci) return null;
+                                      return (
+                                        <div className="space-y-4">
+                                          <div className="flex justify-between items-center border-b pb-3">
+                                            <div>
+                                              <div className="flex items-center gap-2 mb-1.5">
+                                                <Badge className="bg-slate-900 text-white font-bold px-2 py-0.5 text-xs">
+                                                  Quarterly Review - {ci.quarter}
+                                                </Badge>
+                                                {ci.checkInDate && (
+                                                  <Badge variant="outline" className="text-slate-700 border-slate-300 bg-slate-50 text-[10px] px-2 py-0.5 h-auto">
+                                                    Check-In Date: {new Date(ci.checkInDate + 'T00:00:00').toLocaleDateString()}
+                                                  </Badge>
+                                                )}
+                                              </div>
+                                              <p className="text-xs text-slate-500">
+                                                Conducted with trainer by <strong>{ci.createdByName}</strong> (Logged on: {new Date(ci.createdAt).toLocaleDateString()})
+                                              </p>
+                                            </div>
+                                            <Button 
+                                              variant="outline" 
+                                              size="sm"
+                                              onClick={() => setSelectedReviewId(null)}
+                                              className="text-xs border-slate-200 h-8 gap-1"
+                                            >
+                                              <Plus className="w-3.5 h-3.5 text-slate-500" />
+                                              New Check-In
+                                            </Button>
+                                          </div>
+
+                                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                            <div className="p-3 bg-red-50/20 border border-red-100 rounded-lg">
+                                              <p className="text-[9px] text-red-800 font-bold uppercase tracking-wider mb-1">Listen360 Score</p>
+                                              <p className="text-sm font-bold text-slate-800">{ci.listen360Score || 'N/A'}</p>
+                                            </div>
+                                            <div className="p-3 bg-blue-50/20 border border-blue-100 rounded-lg">
+                                              <p className="text-[9px] text-blue-800 font-bold uppercase tracking-wider mb-1">Quarterly Retention</p>
+                                              <p className="text-sm font-bold text-slate-800">{ci.retentionRate || 'N/A'}</p>
+                                            </div>
+                                            <div className="p-3 bg-amber-50/20 border border-amber-100 rounded-lg">
+                                              <p className="text-[9px] text-amber-800 font-bold uppercase tracking-wider mb-1">Referrals Collected</p>
+                                              <p className="text-sm font-bold text-slate-800">{ci.referralsCollected || 'N/A'}</p>
+                                            </div>
+                                          </div>
+
+                                          <div className="space-y-3.5 mt-2">
+                                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                              <h6 className="text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">SOAP Notes (Subjective, Objective, Assessment, Plan)</h6>
+                                              <p className="text-xs text-slate-600 whitespace-pre-line leading-relaxed">{ci.soapNotes || <span className="italic text-slate-400">No notes recorded</span>}</p>
+                                            </div>
+
+                                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                              <h6 className="text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">Programming Notes</h6>
+                                              <p className="text-xs text-slate-600 whitespace-pre-line leading-relaxed">{ci.programmingNotes || <span className="italic text-slate-400">No programming notes recorded</span>}</p>
+                                            </div>
+
+                                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                              <h6 className="text-[10px] font-bold text-slate-705 text-slate-700 uppercase tracking-wider mb-1">Brainstorming for future</h6>
+                                              <p className="text-xs text-slate-600 whitespace-pre-line leading-relaxed">{ci.brainstormingFuture || <span className="italic text-slate-400">No brainstorming guidelines recorded</span>}</p>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      );
+                                    })()
+                                  ) : (
+                                    <div className="space-y-4">
+                                      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b pb-3">
+                                        <div>
+                                          <h5 className="font-bold text-slate-900 text-[14px]">Conduct Quarterly Staff Check-In</h5>
+                                          <p className="text-xs text-slate-400 font-medium">This check-in is private to the trainer and managers only.</p>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                          <div className="w-24">
+                                            <Label htmlFor="checkin-quarter-select" className="text-[10px] text-slate-500 font-bold block mb-1">Quarter</Label>
+                                            <Select 
+                                              value={checkInQuarter} 
+                                              onValueChange={setCheckInQuarter}
+                                            >
+                                              <SelectTrigger id="checkin-quarter-select" className="h-8 text-xs border-slate-200">
+                                                <SelectValue placeholder="Quarter" />
+                                              </SelectTrigger>
+                                              <SelectContent>
+                                                <SelectItem value="Q1 2025">Q1 2025</SelectItem>
+                                                <SelectItem value="Q2 2025">Q2 2025</SelectItem>
+                                                <SelectItem value="Q3 2025">Q3 2025</SelectItem>
+                                                <SelectItem value="Q4 2025">Q4 2025</SelectItem>
+                                                <SelectItem value="Q1 2026">Q1 2026</SelectItem>
+                                                <SelectItem value="Q2 2026">Q2 2026</SelectItem>
+                                                <SelectItem value="Q3 2026">Q3 2026</SelectItem>
+                                                <SelectItem value="Q4 2026">Q4 2026</SelectItem>
+                                                <SelectItem value="Q1 2027">Q1 2027</SelectItem>
+                                                <SelectItem value="Q2 2027">Q2 2027</SelectItem>
+                                                <SelectItem value="Q3 2027">Q3 2027</SelectItem>
+                                                <SelectItem value="Q4 2027">Q4 2027</SelectItem>
+                                              </SelectContent>
+                                            </Select>
+                                          </div>
+                                          <div className="w-36">
+                                            <Label htmlFor="checkin-date-input" className="text-[10px] text-slate-500 font-bold block mb-1">Check-In Date</Label>
+                                            <Input
+                                              id="checkin-date-input"
+                                              type="date"
+                                              value={checkInDate}
+                                              onChange={(e) => setCheckInDate(e.target.value)}
+                                              className="h-8 text-xs border-slate-200 focus-visible:ring-red-500"
+                                            />
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                        <div className="space-y-1">
+                                          <Label htmlFor="listen360" className="text-xs font-semibold text-slate-700">Listen360 Score</Label>
+                                          <Input 
+                                            id="listen360" 
+                                            placeholder="e.g. 9.5 or 10"
+                                            value={checkInListen360Score}
+                                            onChange={(e) => setCheckInListen360Score(e.target.value)}
+                                            className="h-9 border-slate-200 text-xs focus-visible:ring-red-500 bg-white"
+                                          />
+                                        </div>
+                                        <div className="space-y-1">
+                                          <Label htmlFor="retention" className="text-xs font-semibold text-slate-700">Quarterly Retention</Label>
+                                          <Input 
+                                            id="retention" 
+                                            placeholder="e.g. 92% or High"
+                                            value={checkInRetentionRate}
+                                            onChange={(e) => setCheckInRetentionRate(e.target.value)}
+                                            className="h-9 border-slate-200 text-xs focus-visible:ring-red-500 bg-white"
+                                          />
+                                        </div>
+                                        <div className="space-y-1">
+                                          <Label htmlFor="referrals" className="text-xs font-semibold text-slate-700">Referrals Collected</Label>
+                                          <Input 
+                                            id="referrals" 
+                                            placeholder="e.g. 4 new clients"
+                                            value={checkInReferralsCollected}
+                                            onChange={(e) => setCheckInReferralsCollected(e.target.value)}
+                                            className="h-9 border-slate-200 text-xs focus-visible:ring-red-500 bg-white"
+                                          />
+                                        </div>
+                                      </div>
+
+                                      <div className="space-y-3 mt-1">
+                                        <div className="space-y-1">
+                                          <Label htmlFor="soap-notes" className="text-xs font-semibold text-slate-700">
+                                            SOAP Notes (Subjective, Objective, Assessment, Plan)
+                                          </Label>
+                                          <Textarea
+                                            id="soap-notes"
+                                            placeholder="Enter trainer review notes, physical therapy context, or overall performance observations..."
+                                            value={checkInSoapNotes}
+                                            onChange={(e) => setCheckInSoapNotes(e.target.value)}
+                                            className="min-h-[50px] text-xs focus-visible:ring-red-500 border-slate-200 bg-white"
+                                          />
+                                        </div>
+
+                                        <div className="space-y-1">
+                                          <Label htmlFor="prog-notes" className="text-xs font-semibold text-slate-700">
+                                            Programming Notes
+                                          </Label>
+                                          <Textarea
+                                            id="prog-notes"
+                                            placeholder="Enter adjustments made to trainer's client/athlete programming or coaching guidelines..."
+                                            value={checkInProgrammingNotes}
+                                            onChange={(e) => setCheckInProgrammingNotes(e.target.value)}
+                                            className="min-h-[50px] text-xs focus-visible:ring-red-500 border-slate-200 bg-white"
+                                          />
+                                        </div>
+
+                                        <div className="space-y-1">
+                                          <Label htmlFor="brainstorming" className="text-xs font-semibold text-slate-700">
+                                            Brainstorming for future
+                                          </Label>
+                                          <Textarea
+                                            id="brainstorming"
+                                            placeholder="Discuss goals, career steps, upcoming education or initiatives..."
+                                            value={checkInBrainstormingFuture}
+                                            onChange={(e) => setCheckInBrainstormingFuture(e.target.value)}
+                                            className="min-h-[50px] text-xs focus-visible:ring-red-500 border-slate-200 bg-white"
+                                          />
+                                        </div>
+                                      </div>
+
+                                      <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
+                                        <Button 
+                                          variant="ghost" 
+                                          onClick={() => {
+                                            setCheckInListen360Score('');
+                                            setCheckInRetentionRate('');
+                                            setCheckInReferralsCollected('');
+                                            setCheckInSoapNotes('');
+                                            setCheckInProgrammingNotes('');
+                                            setCheckInBrainstormingFuture('');
+                                          }}
+                                          className="text-xs h-8 text-slate-500 hover:bg-slate-100"
+                                        >
+                                          Reset
+                                        </Button>
+                                        <Button 
+                                          onClick={() => handleAddCheckIn(trainer.id)}
+                                          className="bg-red-600 hover:bg-red-700 h-8 text-xs font-semibold text-white px-4 shadow-sm"
+                                        >
+                                          Save Check-In
+                                        </Button>
+                                      </div>
                                     </div>
                                   )}
                                 </div>

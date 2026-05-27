@@ -68,6 +68,21 @@ export interface Certification {
   expectedCompletionAlertSent?: boolean;
 }
 
+export interface StaffCheckIn {
+  id: string;
+  quarter: string;
+  checkInDate: string;
+  listen360Score: string;
+  retentionRate: string;
+  referralsCollected: string;
+  soapNotes: string;
+  programmingNotes: string;
+  brainstormingFuture: string;
+  createdAt: string;
+  createdBy: string;
+  createdByName: string;
+}
+
 export interface Trainer {
   id: string;
   name: string;
@@ -76,6 +91,9 @@ export interface Trainer {
   location?: Location;
   photoURL?: string;
   certifications?: Certification[];
+  checkIns?: StaffCheckIn[];
+  birthday?: string;
+  workAnniversary?: string;
 }
 
 export interface Alert {
