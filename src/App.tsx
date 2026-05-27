@@ -223,7 +223,14 @@ function AppContent() {
   
   const [selectedReportLocation, setSelectedReportLocation] = useState<Location | ''>('');
   const [reportItemCounts, setReportItemCounts] = useState<Record<string, number>>({});
+  const [auditedItemIds, setAuditedItemIds] = useState<Record<string, boolean>>({});
   const [reportNotes, setReportNotes] = useState('');
+  
+  const [isRestockRequestOpen, setIsRestockRequestOpen] = useState(false);
+  const [selectedRestockLocation, setSelectedRestockLocation] = useState<Location | ''>('');
+  const [restockItemIds, setRestockItemIds] = useState<Record<string, boolean>>({});
+  const [restockItemQuantities, setRestockItemQuantities] = useState<Record<string, number>>({});
+  const [restockNotes, setRestockNotes] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [newQuestion, setNewQuestion] = useState('');
 
@@ -1091,7 +1098,7 @@ function AppContent() {
     }
 
     const itemsToRecord: InventoryReportItem[] = inventoryItems
-      .filter(item => item.location === selectedReportLocation)
+      .filter(item => item.location === selectedReportLocation && auditedItemIds[item.id])
       .map(item => ({
         itemId: item.id,
         itemName: item.name,
@@ -1099,7 +1106,7 @@ function AppContent() {
       }));
 
     if (itemsToRecord.length === 0) {
-      toast.error("No items found for this location");
+      toast.error("Please select at least one item to audit");
       return;
     }
 
@@ -1131,13 +1138,110 @@ function AppContent() {
 
       await batch.commit();
       
-      toast.success("Inventory report submitted and stock levels updated");
+      toast.success(`Inventory audit report submitted! Updated ${itemsToRecord.length} checked item(s).`);
       setIsInventoryReportOpen(false);
       setSelectedReportLocation('');
       setReportItemCounts({});
+      setAuditedItemIds({});
       setReportNotes('');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'inventoryReports');
+    }
+  };
+
+  const handleSubmitRestockRequest = async () => {
+    if (!user || !selectedRestockLocation) {
+      toast.error("Please select a location");
+      return;
+    }
+
+    const itemsRequested = inventoryItems
+      .filter(item => item.location === selectedRestockLocation && restockItemIds[item.id])
+      .map(item => ({
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        currentQuantity: item.quantity,
+        requestedQuantity: restockItemQuantities[item.id] ?? 5
+      }));
+
+    if (itemsRequested.length === 0) {
+      toast.error("Please select at least one item to request a restock");
+      return;
+    }
+
+    try {
+      const recipients = trainers.filter(t => 
+        (t.role === 'admin' && t.location === selectedRestockLocation) || 
+        t.role === 'owner'
+      );
+
+      const itemsListHtml = itemsRequested.map(item => `
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 10px; font-weight: bold; color: #334155;">${item.name}</td>
+          <td style="padding: 10px; color: #64748b; text-transform: capitalize;">${item.category.replace('-', ' ')}</td>
+          <td style="padding: 10px; text-align: center; color: #64748b;">${item.currentQuantity}</td>
+          <td style="padding: 10px; text-align: center; font-weight: bold; color: #dc2626;">${item.requestedQuantity}</td>
+        </tr>
+      `).join('');
+
+      for (const recipient of recipients) {
+        if (recipient.email) {
+          await addDoc(collection(db, 'mail'), {
+            to: recipient.email,
+            message: {
+              subject: `🛒 Restock Request: ${selectedRestockLocation} - Submitted by ${user.name}`,
+              html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+                  <div style="background-color: #dc2626; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                    <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
+                      🛒 New Restock Request
+                    </h2>
+                  </div>
+                  
+                  <p>Hi <strong>${recipient.name}</strong>,</p>
+                  <p>A new inventory restock request has been submitted by <strong>${user.name}</strong> for the <strong>${selectedRestockLocation}</strong> facility.</p>
+                  
+                  <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                    <thead>
+                      <tr style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0; text-align: left;">
+                        <th style="padding: 10px; color: #475569; font-size: 13px;">Item Name</th>
+                        <th style="padding: 10px; color: #475569; font-size: 13px;">Category</th>
+                        <th style="padding: 10px; color: #475569; font-size: 13px; text-align: center;">Current Stock</th>
+                        <th style="padding: 10px; color: #475569; font-size: 13px; text-align: center;">Requested Qty</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${itemsListHtml}
+                    </tbody>
+                  </table>
+
+                  ${restockNotes ? `
+                    <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border-left: 4px solid #dc2626; margin: 20px 0;">
+                      <p style="margin: 0 0 5px 0; font-weight: bold; color: #475569; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Request Notes:</p>
+                      <p style="margin: 0; color: #334155; font-style: italic;">"${restockNotes}"</p>
+                    </div>
+                  ` : ''}
+                  
+                  <p>Please review local inventory and coordinate purchasing as needed.</p>
+                  
+                  <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                  <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated request form from the Vasta Personal Training Dashboard.</p>
+                </div>
+              `
+            }
+          });
+        }
+      }
+
+      toast.success(`Restock request sent to location manager and owner for ${itemsRequested.length} item(s)!`);
+      setIsRestockRequestOpen(false);
+      setSelectedRestockLocation('');
+      setRestockItemIds({});
+      setRestockItemQuantities({});
+      setRestockNotes('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'restockRequests');
     }
   };
 
@@ -1516,6 +1620,21 @@ function AppContent() {
                   Audit Inventory
                 </Button>
 
+                <Button 
+                  onClick={() => {
+                    setIsRestockRequestOpen(true);
+                    setSelectedRestockLocation('');
+                    setRestockItemIds({});
+                    setRestockItemQuantities({});
+                    setRestockNotes('');
+                  }}
+                  variant="outline"
+                  className="gap-2 border-slate-200 hover:bg-slate-50"
+                >
+                  <ShoppingCart className="w-4 h-4 text-red-600" />
+                  Request Restock
+                </Button>
+
                 <Dialog open={isNewInventoryOpen} onOpenChange={(open) => {
                 setIsNewInventoryOpen(open);
                 if (!open) {
@@ -1656,8 +1775,18 @@ function AppContent() {
                     <Select 
                       value={selectedReportLocation} 
                       onValueChange={(val) => {
-                        setSelectedReportLocation(val as Location);
+                        const loc = val as Location;
+                        setSelectedReportLocation(loc);
                         setReportItemCounts({});
+                        
+                        // Default all items for the selected location to audited/checked
+                        const initialSelected: Record<string, boolean> = {};
+                        inventoryItems
+                          .filter(item => item.location === loc)
+                          .forEach(item => {
+                            initialSelected[item.id] = true;
+                          });
+                        setAuditedItemIds(initialSelected);
                       }}
                     >
                       <SelectTrigger id="report-location" className="w-full">
@@ -1678,31 +1807,57 @@ function AppContent() {
                         <div className="space-y-3">
                           {inventoryItems
                             .filter(item => item.location === selectedReportLocation)
-                            .map(item => (
-                              <div key={item.id} className="flex items-center justify-between gap-4 p-2 bg-white rounded-md border border-slate-100 shadow-sm">
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-sm font-medium text-slate-900 truncate">{item.name}</p>
-                                  <p className="text-[10px] text-slate-500 uppercase">{item.category.replace('-', ' ')}</p>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <div className="text-right">
-                                    <p className="text-[10px] text-slate-400 font-medium leading-none mb-1">Current: {item.quantity}</p>
-                                    <Input
-                                      type="number"
-                                       value={isNaN(reportItemCounts[item.id] ?? item.quantity) ? '' : (reportItemCounts[item.id] ?? item.quantity)}
-                                      onChange={(e) => {
-                                        const val = parseInt(e.target.value);
-                                        setReportItemCounts({ 
-                                          ...reportItemCounts, 
-                                          [item.id]: isNaN(val) ? 0 : val 
+                            .map(item => {
+                              const isAudited = !!auditedItemIds[item.id];
+                              return (
+                                <div 
+                                  key={item.id} 
+                                  className={`flex items-center justify-between gap-4 p-2 rounded-md border shadow-sm transition-all duration-200 ${
+                                    isAudited 
+                                      ? 'bg-red-50/20 border-red-100 hover:bg-red-50/30' 
+                                      : 'bg-slate-50 border-slate-200 opacity-60'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                                    <Checkbox 
+                                      id={`audit-item-${item.id}`}
+                                      checked={isAudited}
+                                      onCheckedChange={(checked) => {
+                                        setAuditedItemIds({
+                                          ...auditedItemIds,
+                                          [item.id]: !!checked
                                         });
                                       }}
-                                      className="w-20 h-8 text-sm"
                                     />
+                                    <Label 
+                                      htmlFor={`audit-item-${item.id}`}
+                                      className="min-w-0 flex-1 select-none cursor-pointer space-y-0.5"
+                                    >
+                                      <p className={`text-sm font-semibold truncate ${isAudited ? 'text-slate-900' : 'text-slate-500'}`}>{item.name}</p>
+                                      <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{item.category.replace('-', ' ')}</p>
+                                    </Label>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-right">
+                                      <p className="text-[10px] text-slate-400 font-medium leading-none mb-1">Current: {item.quantity}</p>
+                                      <Input
+                                        type="number"
+                                        disabled={!isAudited}
+                                        value={!isAudited ? '' : (isNaN(reportItemCounts[item.id] ?? item.quantity) ? '' : (reportItemCounts[item.id] ?? item.quantity))}
+                                        onChange={(e) => {
+                                          const val = parseInt(e.target.value);
+                                          setReportItemCounts({ 
+                                            ...reportItemCounts, 
+                                            [item.id]: isNaN(val) ? 0 : val 
+                                          });
+                                        }}
+                                        className="w-20 h-8 text-sm focus-visible:ring-red-500 bg-white"
+                                      />
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
-                            ))
+                              );
+                            })
                           }
                           {inventoryItems.filter(item => item.location === selectedReportLocation).length === 0 && (
                             <p className="text-sm text-slate-500 italic text-center py-4">No items listed for this location.</p>
@@ -1731,6 +1886,150 @@ function AppContent() {
                     className="bg-red-600 hover:bg-red-700"
                   >
                     Submit Audit Report
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Inventory Restock Request Dialog */}
+            <Dialog open={isRestockRequestOpen} onOpenChange={setIsRestockRequestOpen}>
+              <DialogContent className="sm:max-w-[600px] max-h-[85vh] flex flex-col">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <ShoppingCart className="w-5 h-5 text-red-600" />
+                    Request Inventory Restock
+                  </DialogTitle>
+                  <DialogDescription>
+                    Select a location and choose the items you want to request a restock for. An email alert will be sent to the location manager and owner.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-6 py-4 flex-1 overflow-y-auto">
+                  <div className="grid gap-2">
+                    <Label htmlFor="restock-location">Location</Label>
+                    <Select 
+                      value={selectedRestockLocation} 
+                      onValueChange={(val) => {
+                        const loc = val as Location;
+                        setSelectedRestockLocation(loc);
+                        
+                        const initialSelected: Record<string, boolean> = {};
+                        const initialQuantities: Record<string, number> = {};
+                        inventoryItems
+                          .filter(item => item.location === loc)
+                          .forEach(item => {
+                            initialSelected[item.id] = false;
+                            initialQuantities[item.id] = 5; // Default request quantity
+                          });
+                        setRestockItemIds(initialSelected);
+                        setRestockItemQuantities(initialQuantities);
+                      }}
+                    >
+                      <SelectTrigger id="restock-location" className="w-full">
+                        <SelectValue placeholder="Select Location" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Dorset Street">Dorset Street</SelectItem>
+                        <SelectItem value="Shelburne Road">Shelburne Road</SelectItem>
+                        <SelectItem value="West Palm Beach">West Palm Beach</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {selectedRestockLocation && (
+                    <div className="space-y-4">
+                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Items at {selectedRestockLocation}</h4>
+                        <div className="space-y-3">
+                          {inventoryItems
+                            .filter(item => item.location === selectedRestockLocation)
+                            .map(item => {
+                              const isChecked = !!restockItemIds[item.id];
+                              return (
+                                <div 
+                                  key={item.id} 
+                                  className={`flex items-center justify-between gap-4 p-2 rounded-md border shadow-sm transition-all duration-200 ${
+                                    isChecked 
+                                      ? 'bg-red-50/20 border-red-100 hover:bg-red-50/30' 
+                                      : 'bg-slate-50 border-slate-200 opacity-60'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                                    <Checkbox 
+                                      id={`restock-item-${item.id}`}
+                                      checked={isChecked}
+                                      onCheckedChange={(checked) => {
+                                        setRestockItemIds({
+                                          ...restockItemIds,
+                                          [item.id]: !!checked
+                                        });
+                                      }}
+                                    />
+                                    <Label 
+                                      htmlFor={`restock-item-${item.id}`}
+                                      className="min-w-0 flex-1 select-none cursor-pointer space-y-0.5"
+                                    >
+                                      <p className={`text-sm font-semibold truncate ${isChecked ? 'text-slate-900' : 'text-slate-500'}`}>{item.name}</p>
+                                      <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{item.category.replace('-', ' ')}</p>
+                                    </Label>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-right">
+                                      <div className="flex items-center gap-1.5">
+                                        <p className="text-[10px] text-slate-400 font-medium leading-none mb-1">Current: {item.quantity}</p>
+                                        <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 bg-white">In Stock</Badge>
+                                      </div>
+                                      <div className="flex items-center gap-2 mt-1">
+                                        <Label htmlFor={`qty-input-${item.id}`} className="text-[10px] text-slate-400">Request Qty:</Label>
+                                        <Input
+                                          id={`qty-input-${item.id}`}
+                                          type="number"
+                                          disabled={!isChecked}
+                                          value={!isChecked ? '' : (isNaN(restockItemQuantities[item.id] ?? 5) ? '' : (restockItemQuantities[item.id] ?? 5))}
+                                          onChange={(e) => {
+                                            const val = parseInt(e.target.value);
+                                            setRestockItemQuantities({ 
+                                              ...restockItemQuantities, 
+                                              [item.id]: isNaN(val) ? 0 : val 
+                                            });
+                                          }}
+                                          className="w-16 h-8 text-sm focus-visible:ring-red-500 bg-white"
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          }
+                          {inventoryItems.filter(item => item.location === selectedRestockLocation).length === 0 && (
+                            <p className="text-sm text-slate-500 italic text-center py-4">No items listed for this location.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label htmlFor="restock-notes">Request Notes / Comments</Label>
+                        <Textarea 
+                          id="restock-notes"
+                          placeholder="Provide any context, urgency, or instructions..."
+                          value={restockNotes}
+                          onChange={(e) => setRestockNotes(e.target.value)}
+                          className="min-h-[80px]"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <DialogFooter className="mt-4">
+                  <Button variant="outline" onClick={() => setIsRestockRequestOpen(false)}>Cancel</Button>
+                  <Button 
+                    onClick={handleSubmitRestockRequest}
+                    disabled={!selectedRestockLocation}
+                    className="bg-red-600 hover:bg-red-700"
+                  >
+                    Send Restock Request
                   </Button>
                 </DialogFooter>
               </DialogContent>
