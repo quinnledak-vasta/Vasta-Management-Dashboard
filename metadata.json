@@ -1,5 +1,6 @@
 {
   "name": "Vasta Personal Training Dashboard",
   "description": "Internal management dashboard for personal training teams to assign tasks, track vacation requests, manage facility staff, and conduct inventory audits across multiple locations.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

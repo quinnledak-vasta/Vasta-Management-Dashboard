@@ -42,6 +42,8 @@ export interface Task {
   description: string;
   assignedTo: string;
   assignedToName: string;
+  assignedToIds?: string[];
+  assignedToNames?: string[];
   status: TaskStatus;
   priority: Priority;
   dueDate: string;

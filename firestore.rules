@@ -50,6 +50,8 @@ service cloud.firestore {
              data.description is string &&
              data.assignedTo is string && 
              data.assignedToName is string &&
+             (data.get('assignedToIds', null) == null || data.assignedToIds is list) &&
+             (data.get('assignedToNames', null) == null || data.assignedToNames is list) &&
              data.status in ['pending', 'in-progress', 'completed'] &&
              data.priority in ['low', 'medium', 'high'] &&
              data.dueDate is string &&
@@ -139,9 +141,22 @@ service cloud.firestore {
 
     // Tasks collection
     match /tasks/{taskId} {
-      allow read: if isAuthenticated() && (isAdmin() || request.auth.uid == resource.data.assignedTo || request.auth.uid == resource.data.createdBy);
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        request.auth.uid == resource.data.assignedTo || 
+        request.auth.uid in resource.data.get('assignedToIds', []) || 
+        request.auth.uid == resource.data.createdBy
+      );
       allow create: if isAdmin() && isValidTask(request.resource.data) && request.auth.uid == request.resource.data.createdBy;
-      allow update: if (isAdmin() || (isAuthenticated() && (request.auth.uid == resource.data.assignedTo || request.auth.uid == resource.data.createdBy))) && isValidTask(request.resource.data);
+      allow update: if (
+        isAdmin() || (
+          isAuthenticated() && (
+            request.auth.uid == resource.data.assignedTo || 
+            request.auth.uid in resource.data.get('assignedToIds', []) || 
+            request.auth.uid == resource.data.createdBy
+          )
+        )
+      ) && isValidTask(request.resource.data);
       allow delete: if isAdmin() || (isAuthenticated() && resource.data.createdBy == request.auth.uid);
     }
 

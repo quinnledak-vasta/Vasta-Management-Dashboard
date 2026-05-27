@@ -242,7 +242,7 @@ function AppContent() {
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
-    assignedToId: '',
+    assignedToIds: [] as string[],
     priority: 'medium' as Priority,
     dueDate: new Date().toISOString().split('T')[0],
   });
@@ -270,7 +270,11 @@ function AppContent() {
     } else {
       q = query(
         collection(db, path), 
-        or(where('assignedTo', '==', user.id), where('createdBy', '==', user.id)),
+        or(
+          where('assignedTo', '==', user.id), 
+          where('assignedToIds', 'array-contains', user.id),
+          where('createdBy', '==', user.id)
+        ),
         orderBy('createdAt', 'desc')
       );
     }
@@ -285,7 +289,7 @@ function AppContent() {
       handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
-  }, [user]);
+  }, [user, isAdmin]);
 
   // Fetch Trainers from Firestore
   useEffect(() => {
@@ -430,18 +434,21 @@ function AppContent() {
   }, [tasks, searchQuery]);
 
   const handleCreateTask = async () => {
-    if (!newTask.title || !newTask.assignedToId) {
-      toast.error("Please provide a title and select a trainer");
+    if (!newTask.title || newTask.assignedToIds.length === 0) {
+      toast.error("Please provide a title and select at least one trainer");
       return;
     }
 
-    const trainer = trainers.find(t => t.id === newTask.assignedToId);
+    const assignedTrainers = trainers.filter(t => newTask.assignedToIds.includes(t.id));
+    const firstTrainer = assignedTrainers[0];
     
     const taskData: Omit<Task, 'id'> = {
       title: newTask.title,
       description: newTask.description,
-      assignedTo: newTask.assignedToId,
-      assignedToName: trainer?.name || 'Unknown',
+      assignedTo: firstTrainer?.id || '',
+      assignedToName: assignedTrainers.map(t => t.name).join(', ') || 'Unknown',
+      assignedToIds: newTask.assignedToIds,
+      assignedToNames: assignedTrainers.map(t => t.name),
       status: 'pending',
       priority: newTask.priority,
       dueDate: new Date(newTask.dueDate).toISOString(),
@@ -457,34 +464,35 @@ function AppContent() {
     try {
       const taskRef = await addDoc(collection(db, 'tasks'), taskData);
       
-      // Send email notification if trainer email is available
-      if (trainer?.email) {
-        try {
-          await addDoc(collection(db, 'mail'), {
-            to: trainer.email,
-            message: {
-              subject: `New Task Assigned: ${taskData.title}`,
-              html: `
-                <div style="font-family: sans-serif; padding: 20px; color: #333;">
-                  <h2 style="color: #ef4444;">New Task Assigned</h2>
-                  <p>Hi <strong>${trainer.name}</strong>,</p>
-                  <p>A new task has been assigned to you by <strong>${taskData.createdByName}</strong>.</p>
-                  <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
-                    <h3 style="margin-top: 0;">${taskData.title}</h3>
-                    <p>${taskData.description || 'No description provided.'}</p>
-                    <p><strong>Priority:</strong> ${taskData.priority.charAt(0).toUpperCase() + taskData.priority.slice(1)}</p>
-                    <p><strong>Due Date:</strong> ${new Date(taskData.dueDate).toLocaleDateString()}</p>
+      // Send email notifications to each trainer if email is available
+      for (const trainer of assignedTrainers) {
+        if (trainer.email) {
+          try {
+            await addDoc(collection(db, 'mail'), {
+              to: trainer.email,
+              message: {
+                subject: `New Task Assigned: ${taskData.title}`,
+                html: `
+                  <div style="font-family: sans-serif; padding: 20px; color: #333;">
+                    <h2 style="color: #ef4444;">New Task Assigned</h2>
+                    <p>Hi <strong>${trainer.name}</strong>,</p>
+                    <p>A new administrative task has been assigned to you (and other team members: ${taskData.assignedToName}) by <strong>${taskData.createdByName}</strong>.</p>
+                    <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                      <h3 style="margin-top: 0;">${taskData.title}</h3>
+                      <p>${taskData.description || 'No description provided.'}</p>
+                      <p><strong>Priority:</strong> ${taskData.priority.charAt(0).toUpperCase() + taskData.priority.slice(1)}</p>
+                      <p><strong>Due Date:</strong> ${new Date(taskData.dueDate).toLocaleDateString()}</p>
+                    </div>
+                    <p>Please log in to the dashboard to view more details.</p>
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                    <p style="font-size: 12px; color: #94a3b8;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
                   </div>
-                  <p>Please log in to the dashboard to view more details.</p>
-                  <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                  <p style="font-size: 12px; color: #94a3b8;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
-                </div>
-              `
-            }
-          });
-        } catch (emailError) {
-          console.error("Failed to queue notification email:", emailError);
-          // Don't toast error for email failure, the task was created successfully
+                `
+              }
+            });
+          } catch (emailError) {
+            console.error(`Failed to queue notification email for ${trainer.email}:`, emailError);
+          }
         }
       }
 
@@ -492,7 +500,7 @@ function AppContent() {
       setNewTask({
         title: '',
         description: '',
-        assignedToId: '',
+        assignedToIds: [] as string[],
         priority: 'medium',
         dueDate: new Date().toISOString().split('T')[0],
       });
@@ -1091,7 +1099,7 @@ function AppContent() {
                     </Button>
                   }
                 />
-                <DialogContent className="sm:max-w-[500px]">
+                <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Assign New Task</DialogTitle>
                     <DialogDescription>
@@ -1118,20 +1126,42 @@ function AppContent() {
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label htmlFor="assignedTo">Assign To</Label>
-                      <Select 
-                        value={newTask.assignedToId} 
-                        onValueChange={(val) => setNewTask({ ...newTask, assignedToId: val })}
-                      >
-                        <SelectTrigger id="assignedTo">
-                          <SelectValue placeholder="Select trainer" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {trainers.map(t => (
-                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <Label className="text-slate-700 font-semibold mb-1">Assign To (Select one or more)</Label>
+                      <div className="border border-slate-200 rounded-lg p-3 max-h-44 overflow-y-auto space-y-1.5 bg-white shadow-sm">
+                        {trainers.map(t => {
+                          const isChecked = newTask.assignedToIds.includes(t.id);
+                          return (
+                            <label key={t.id} className="flex items-center gap-2.5 cursor-pointer hover:bg-slate-50 p-2 rounded-md transition-all select-none border border-transparent hover:border-slate-100">
+                              <input 
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => {
+                                  if (isChecked) {
+                                    setNewTask({
+                                      ...newTask,
+                                      assignedToIds: newTask.assignedToIds.filter(id => id !== t.id)
+                                    });
+                                  } else {
+                                    setNewTask({
+                                      ...newTask,
+                                      assignedToIds: [...newTask.assignedToIds, t.id]
+                                    });
+                                  }
+                                }}
+                                className="rounded text-red-600 focus:ring-red-500 h-4 w-4 border-slate-300 accent-red-600 cursor-pointer"
+                              />
+                              <div className="flex items-center gap-2">
+                                <Avatar className="w-5 h-5">
+                                  <AvatarImage src={t.photoURL || `https://picsum.photos/seed/${t.id}/100/100`} />
+                                  <AvatarFallback className="text-[9px]">{t.name[0]}</AvatarFallback>
+                                </Avatar>
+                                <span className="text-xs font-semibold text-slate-700">{t.name}</span>
+                                <span className="text-[10px] text-slate-400 capitalize">({t.role})</span>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="grid gap-2">
@@ -1179,7 +1209,7 @@ function AppContent() {
                     </Button>
                   }
                 />
-                <DialogContent className="sm:max-w-[425px]">
+                <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Add New Resource</DialogTitle>
                     <DialogDescription>
@@ -1256,7 +1286,7 @@ function AppContent() {
                     </Button>
                   }
                 />
-                <DialogContent className="sm:max-w-[425px]">
+                <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>{editingItemId ? 'Edit Inventory Item' : 'Add Inventory Item'}</DialogTitle>
                     <DialogDescription>
@@ -1553,12 +1583,31 @@ function AppContent() {
                             <p className="text-xs text-slate-500 line-clamp-2 mb-4">{task.description}</p>
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
-                                <Avatar className="w-6 h-6">
-                                  <AvatarImage src={trainers.find(t => t.id === task.assignedTo)?.photoURL || `https://picsum.photos/seed/${task.assignedTo}/100/100`} />
-                                  <AvatarFallback>{task.assignedToName[0]}</AvatarFallback>
-                                </Avatar>
+                                <div className="flex -space-x-1.5 overflow-hidden">
+                                  {task.assignedToIds && task.assignedToIds.length > 0 ? (
+                                    task.assignedToIds.slice(0, 3).map((trainerId, idx) => {
+                                      const tr = trainers.find(t => t.id === trainerId);
+                                      return (
+                                        <Avatar key={trainerId} className="w-6 h-6 border border-white" style={{ zIndex: 10 - idx }}>
+                                          <AvatarImage src={tr?.photoURL || `https://picsum.photos/seed/${trainerId}/100/100`} />
+                                          <AvatarFallback className="text-[8px]">{(tr?.name || 'U')[0]}</AvatarFallback>
+                                        </Avatar>
+                                      );
+                                    })
+                                  ) : (
+                                    <Avatar className="w-6 h-6">
+                                      <AvatarImage src={trainers.find(t => t.id === task.assignedTo)?.photoURL || `https://picsum.photos/seed/${task.assignedTo}/100/100`} />
+                                      <AvatarFallback>{(task.assignedToName || 'U')[0]}</AvatarFallback>
+                                    </Avatar>
+                                  )}
+                                  {task.assignedToIds && task.assignedToIds.length > 3 && (
+                                    <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-100 border border-white text-[8px] font-bold text-slate-500 z-0">
+                                      +{task.assignedToIds.length - 3}
+                                    </div>
+                                  )}
+                                </div>
                                 <div className="flex flex-col">
-                                  <span className="text-[11px] font-medium text-slate-600 truncate max-w-[80px]">{task.assignedToName}</span>
+                                  <span className="text-[11px] font-medium text-slate-600 truncate max-w-[100px]" title={task.assignedToName}>{task.assignedToName}</span>
                                   {task.createdByName && (
                                     <span className="text-[9px] text-slate-400">By: {task.createdByName}</span>
                                   )}
@@ -1717,11 +1766,11 @@ function AppContent() {
                               <div className="w-20 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                                 <div 
                                   className="h-full bg-red-500" 
-                                  style={{ width: `${(tasks.filter(t => t.assignedTo === trainer.id && t.status !== 'completed').length / 5) * 100}%` }}
+                                  style={{ width: `${(tasks.filter(t => (t.assignedTo === trainer.id || (t.assignedToIds && t.assignedToIds.includes(trainer.id))) && t.status !== 'completed').length / 5) * 100}%` }}
                                 />
                               </div>
                               <span className="text-xs font-medium text-slate-500">
-                                {tasks.filter(t => t.assignedTo === trainer.id && t.status !== 'completed').length}
+                                {tasks.filter(t => (t.assignedTo === trainer.id || (t.assignedToIds && t.assignedToIds.includes(trainer.id))) && t.status !== 'completed').length}
                               </span>
                             </div>
                           </TableCell>
@@ -1891,7 +1940,7 @@ function AppContent() {
                         </Button>
                       }
                     />
-                    <DialogContent className="sm:max-w-[425px]">
+                    <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
                       <DialogHeader>
                         <DialogTitle>{editingVacationId ? 'Edit Vacation Request' : 'Log Vacation Request'}</DialogTitle>
                         <DialogDescription>
@@ -2452,7 +2501,7 @@ function AppContent() {
 
       {/* Task Detail Dialog */}
       <Dialog open={!!selectedTaskId} onOpenChange={(open) => !open && setSelectedTaskId(null)}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
           {selectedTask && (
             <>
               <DialogHeader>
@@ -2475,14 +2524,31 @@ function AppContent() {
                 <div className="grid grid-cols-2 gap-8">
                   <div className="space-y-2">
                     <h4 className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Assigned To</h4>
-                    <div className="flex items-center gap-3">
-                      <Avatar className="w-8 h-8">
-                        <AvatarImage src={trainers.find(t => t.id === selectedTask.assignedTo)?.photoURL || `https://picsum.photos/seed/${selectedTask.assignedTo}/100/100`} />
-                        <AvatarFallback>{selectedTask.assignedToName[0]}</AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="text-sm font-bold">{selectedTask.assignedToName}</p>
-                      </div>
+                    <div className="flex flex-col gap-2 max-h-32 overflow-y-auto">
+                      {selectedTask.assignedToIds && selectedTask.assignedToIds.length > 0 ? (
+                        selectedTask.assignedToIds.map(trainerId => {
+                          const tr = trainers.find(t => t.id === trainerId);
+                          return (
+                            <div key={trainerId} className="flex items-center gap-2">
+                              <Avatar className="w-6 h-6 border">
+                                <AvatarImage src={tr?.photoURL || `https://picsum.photos/seed/${trainerId}/100/100`} />
+                                <AvatarFallback className="text-[9px]">{(tr?.name || 'U')[0]}</AvatarFallback>
+                              </Avatar>
+                              <span className="text-xs font-semibold text-slate-700">{tr?.name || 'Unknown Trainer'}</span>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="flex items-center gap-3">
+                          <Avatar className="w-8 h-8">
+                            <AvatarImage src={trainers.find(t => t.id === selectedTask.assignedTo)?.photoURL || `https://picsum.photos/seed/${selectedTask.assignedTo}/100/100`} />
+                            <AvatarFallback>{(selectedTask.assignedToName || 'U')[0]}</AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <p className="text-sm font-bold">{selectedTask.assignedToName}</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 

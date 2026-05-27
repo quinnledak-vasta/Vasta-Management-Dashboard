@@ -9,6 +9,8 @@
         "description": { "type": "string" },
         "assignedTo": { "type": "string" },
         "assignedToName": { "type": "string" },
+        "assignedToIds": { "type": "array" },
+        "assignedToNames": { "type": "array" },
         "status": { "type": "string", "enum": ["pending", "in-progress", "completed"] },
         "priority": { "type": "string", "enum": ["low", "medium", "high"] },
         "dueDate": { "type": "string", "format": "date-time" },
