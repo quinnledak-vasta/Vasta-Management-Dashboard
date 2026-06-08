@@ -35,7 +35,10 @@
         "role": { "type": "string", "enum": ["admin", "trainer", "owner"] },
         "location": { "type": "string", "enum": ["Dorset Street", "Shelburne Road", "West Palm Beach"] },
         "photoURL": { "type": "string" },
-        "certifications": { "type": "array" }
+        "certifications": { "type": "array" },
+        "birthday": { "type": "string" },
+        "workAnniversary": { "type": "string" },
+        "apparel": { "type": "array" }
       },
       "required": ["id", "name", "email", "role"]
     },

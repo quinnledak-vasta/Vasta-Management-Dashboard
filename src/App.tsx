@@ -9,6 +9,7 @@ import {
   CheckSquare, 
   Users, 
   Plus, 
+  Minus,
   Search, 
   Filter, 
   MoreVertical, 
@@ -130,7 +131,8 @@ import {
   InventoryReportItem,
   Resource,
   Certification,
-  StaffCheckIn
+  StaffCheckIn,
+  StaffApparelItem
 } from './types';
 import { GoogleGenAI } from "@google/genai";
 
@@ -206,6 +208,13 @@ function AppContent() {
   const [invites, setInvites] = useState<Invite[]>([]);
   const [vacations, setVacations] = useState<VacationRequest[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const staffApparelNames = Array.from(
+    new Set(
+      inventoryItems
+        .filter(item => item.category === 'staff-apparel')
+        .map(item => item.name.trim())
+    )
+  ).sort();
   const [inventoryReports, setInventoryReports] = useState<InventoryReport[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   
@@ -229,6 +238,10 @@ function AppContent() {
   const [newCertExpectedCompletion, setNewCertExpectedCompletion] = useState('');
   const [editBirthday, setEditBirthday] = useState('');
   const [editWorkAnniversary, setEditWorkAnniversary] = useState('');
+  const [newApparelName, setNewApparelName] = useState('');
+  const [newApparelQty, setNewApparelQty] = useState('1');
+  const [newApparelSize, setNewApparelSize] = useState('M');
+  const [newApparelNotes, setNewApparelNotes] = useState('');
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
@@ -820,6 +833,102 @@ function AppContent() {
         workAnniversary: workAnniversary || ''
       });
       toast.success("Staff profile details updated successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleAddApparel = async (trainerId: string, apparelName: string, quantity: number, size?: string, notes?: string) => {
+    if (!user) return;
+    const canEdit = isAdmin || user.id === trainerId;
+    if (!canEdit) {
+      toast.error("You do not have permission to manage apparel for this trainer");
+      return;
+    }
+
+    if (!apparelName.trim()) {
+      toast.error("Apparel description/name is required");
+      return;
+    }
+
+    if (quantity <= 0) {
+      toast.error("Quantity must be positive");
+      return;
+    }
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const currentApparel = trainer.apparel || [];
+      const newApparelItem: StaffApparelItem = {
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+        name: apparelName.trim(),
+        quantity,
+        size: size?.trim() || 'M',
+        notes: notes?.trim() || ''
+      };
+
+      const updatedApparel = [...currentApparel, newApparelItem];
+      await updateDoc(doc(db, 'users', trainerId), {
+        apparel: updatedApparel
+      });
+      toast.success("Apparel item added successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleRemoveApparel = async (trainerId: string, apparelId: string) => {
+    if (!user) return;
+    const canEdit = isAdmin || user.id === trainerId;
+    if (!canEdit) {
+      toast.error("You do not have permission to manage apparel for this trainer");
+      return;
+    }
+
+    if (!window.confirm("Are you sure you want to remove this apparel record?")) return;
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const currentApparel = trainer.apparel || [];
+      const updatedApparel = currentApparel.filter(a => a.id !== apparelId);
+
+      await updateDoc(doc(db, 'users', trainerId), {
+        apparel: updatedApparel
+      });
+      toast.success("Apparel item removed");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleUpdateApparelQty = async (trainerId: string, apparelId: string, delta: number) => {
+    if (!user) return;
+    const canEdit = isAdmin || user.id === trainerId;
+    if (!canEdit) {
+      toast.error("You do not have permission to manage apparel for this trainer");
+      return;
+    }
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const currentApparel = trainer.apparel || [];
+      const updatedApparel = currentApparel.map(item => {
+        if (item.id === apparelId) {
+          const newQty = Math.max(1, item.quantity + delta);
+          return { ...item, quantity: newQty };
+        }
+        return item;
+      });
+
+      await updateDoc(doc(db, 'users', trainerId), {
+        apparel: updatedApparel
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
     }
@@ -2782,10 +2891,14 @@ function AppContent() {
                                 setNewCertExpiration('');
                                 setNewCertRenewal('');
                                 setNewCertInProgress(false);
+                                setNewApparelName('');
+                                setNewApparelQty('1');
+                                setNewApparelSize('M');
+                                setNewApparelNotes('');
                               }}
                               className="gap-2 border-slate-200 font-medium"
                             >
-                              <span>{isExpanded ? 'Hide Certs' : 'Manage Certs'}</span>
+                              <span>{isExpanded ? 'Hide Info' : 'Manage Info & Apparel'}</span>
                               <ChevronRight className={`w-4 h-4 transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                             </Button>
                           </div>
@@ -2876,6 +2989,215 @@ function AppContent() {
                                       </Table>
                                     </div>
                                   )}
+
+                                  {/* Staff Apparel Checklist Section */}
+                                  <div className="pt-6 border-t border-slate-200 mt-6 space-y-4">
+                                    <div className="flex items-center justify-between">
+                                      <h5 className="font-bold text-slate-900 flex items-center gap-2">
+                                        <Shirt className="w-4 h-4 text-red-600 shrink-0" />
+                                        Staff Apparel & Gear Allocation
+                                      </h5>
+                                      <span className="text-[11px] text-slate-500 font-medium">Track gear distribution & sizes</span>
+                                    </div>
+
+                                    {(!trainer.apparel || trainer.apparel.length === 0) ? (
+                                      <div className="border border-dashed border-slate-200 rounded-xl p-8 text-center bg-white space-y-1">
+                                        <p className="text-sm text-slate-500 font-semibold">No company apparel registered for this profile.</p>
+                                        <p className="text-xs text-slate-400">Add clothing or gear item the staff member owns below.</p>
+                                      </div>
+                                    ) : (
+                                      <div className="overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm">
+                                        <Table>
+                                          <TableHeader>
+                                            <TableRow className="bg-slate-50 text-slate-700">
+                                              <TableHead className="font-semibold text-xs py-2.5">Apparel / Gear Item</TableHead>
+                                              <TableHead className="font-semibold text-xs text-center w-[100px] py-2.5">Size</TableHead>
+                                              <TableHead className="font-semibold text-xs text-center w-[140px] py-2.5">Quantity</TableHead>
+                                              <TableHead className="font-semibold text-xs py-2.5">Notes / Date Allocated</TableHead>
+                                              <TableHead className="text-right w-[80px] font-semibold text-xs py-2.5">Action</TableHead>
+                                            </TableRow>
+                                          </TableHeader>
+                                          <TableBody>
+                                            {trainer.apparel.map((item) => (
+                                              <TableRow key={item.id} className="hover:bg-slate-50/50">
+                                                <TableCell className="font-bold text-slate-950 py-3">
+                                                  <div className="flex items-center gap-2">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0"></span>
+                                                    {item.name}
+                                                  </div>
+                                                </TableCell>
+                                                <TableCell className="text-center py-3">
+                                                  <Badge variant="outline" className="font-bold bg-slate-50 border-slate-200 text-slate-700 text-xs px-2 py-0.5">
+                                                    {item.size || 'M'}
+                                                  </Badge>
+                                                </TableCell>
+                                                <TableCell className="text-center py-3">
+                                                  <div className="flex items-center justify-center gap-2">
+                                                    {(isAdmin || user.id === trainer.id) ? (
+                                                      <>
+                                                        <Button 
+                                                          variant="outline" 
+                                                          size="sm" 
+                                                          onClick={() => handleUpdateApparelQty(trainer.id, item.id, -1)}
+                                                          disabled={item.quantity <= 1}
+                                                          className="h-7 w-7 p-0 rounded-md border-slate-200 hover:bg-slate-50 bg-white"
+                                                        >
+                                                          <Minus className="w-3.5 h-3.5 text-slate-600" />
+                                                        </Button>
+                                                        <span className="font-bold text-sm w-6 text-center text-slate-900">{item.quantity}</span>
+                                                        <Button 
+                                                          variant="outline" 
+                                                          size="sm" 
+                                                          onClick={() => handleUpdateApparelQty(trainer.id, item.id, 1)}
+                                                          className="h-7 w-7 p-0 rounded-md border-slate-200 hover:bg-slate-50 bg-white"
+                                                        >
+                                                          <Plus className="w-3.5 h-3.5 text-slate-600" />
+                                                        </Button>
+                                                      </>
+                                                    ) : (
+                                                      <span className="font-bold text-sm text-slate-900">{item.quantity}</span>
+                                                    )}
+                                                  </div>
+                                                </TableCell>
+                                                <TableCell className="text-sm text-slate-600 py-3">
+                                                  {item.notes || <span className="text-slate-300 italic text-xs">None</span>}
+                                                </TableCell>
+                                                <TableCell className="text-right py-3">
+                                                  {(isAdmin || user.id === trainer.id) ? (
+                                                    <Button 
+                                                      variant="ghost" 
+                                                      size="sm" 
+                                                      onClick={() => handleRemoveApparel(trainer.id, item.id)}
+                                                      className="text-slate-400 hover:text-red-600 h-8 w-8 p-0"
+                                                    >
+                                                      <Trash2 className="w-4 h-4" />
+                                                    </Button>
+                                                  ) : (
+                                                    <span className="text-xs text-slate-400 italic">Auth Only</span>
+                                                  )}
+                                                </TableCell>
+                                              </TableRow>
+                                            ))}
+                                          </TableBody>
+                                        </Table>
+                                      </div>
+                                    )}
+
+                                    {/* Register/Add New Apparel Form */}
+                                    {(isAdmin || user.id === trainer.id) && (
+                                      <div className="bg-slate-50 border border-slate-200 p-5 rounded-xl space-y-4 shadow-xs">
+                                        <div>
+                                          <h6 className="font-bold text-slate-900 text-xs uppercase tracking-wider">Record Apparel Item</h6>
+                                          <p className="text-[11px] text-slate-500">Add apparel distributed to this team member.</p>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5">
+                                          {/* Apparel Selection / Name */}
+                                          <div className="md:col-span-5 space-y-1.5">
+                                            <Label htmlFor={`apparel-select-${trainer.id}`} className="text-xs font-semibold text-slate-700">Apparel Title / Name</Label>
+                                            <div className="flex flex-col gap-1.5">
+                                              <select 
+                                                id={`apparel-select-${trainer.id}`}
+                                                className="w-full h-9 px-3 rounded-md border border-slate-200 bg-white text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                                                value={staffApparelNames.includes(newApparelName) ? newApparelName : (newApparelName === '' ? 'choose' : 'custom')}
+                                                onChange={(e) => {
+                                                  const val = e.target.value;
+                                                  if (val === 'choose' || val === 'custom') {
+                                                    setNewApparelName('');
+                                                  } else {
+                                                    setNewApparelName(val);
+                                                  }
+                                                }}
+                                              >
+                                                <option value="choose">
+                                                  {staffApparelNames.length === 0 
+                                                    ? "No staff apparel in Catalog..." 
+                                                    : "Select apparel item..."}
+                                                </option>
+                                                {staffApparelNames.map((name) => (
+                                                  <option key={name} value={name}>{name}</option>
+                                                ))}
+                                                <option value="custom">Other / Custom Name...</option>
+                                              </select>
+
+                                              <Input 
+                                                id={`apparel-custom-${trainer.id}`}
+                                                placeholder="Or type custom item name here..." 
+                                                value={newApparelName}
+                                                onChange={(e) => setNewApparelName(e.target.value)}
+                                                className="h-9 border-slate-200 bg-white text-xs"
+                                              />
+                                              <p className="text-[10px] text-slate-400">
+                                                Synced with "Apparel (Staff)" in the Inventory Section.
+                                              </p>
+                                            </div>
+                                          </div>
+
+                                          {/* Size Choice */}
+                                          <div className="md:col-span-2 space-y-1.5">
+                                            <Label htmlFor={`apparel-size-${trainer.id}`} className="text-xs font-semibold text-slate-700">Size</Label>
+                                            <select 
+                                              id={`apparel-size-${trainer.id}`}
+                                              className="w-full h-9 px-3 rounded-md border border-slate-200 bg-white text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                                              value={newApparelSize}
+                                              onChange={(e) => setNewApparelSize(e.target.value)}
+                                            >
+                                              <option value="XS">XS</option>
+                                              <option value="S">S</option>
+                                              <option value="M">M</option>
+                                              <option value="L">L</option>
+                                              <option value="XL">XL</option>
+                                              <option value="XXL">XXL</option>
+                                              <option value="3XL">3XL</option>
+                                              <option value="One-Size">One-Size</option>
+                                            </select>
+                                          </div>
+
+                                          {/* Quantity */}
+                                          <div className="md:col-span-2 space-y-1.5">
+                                            <Label htmlFor={`apparel-qty-${trainer.id}`} className="text-xs font-semibold text-slate-700">Initial Qty</Label>
+                                            <Input 
+                                              id={`apparel-qty-${trainer.id}`}
+                                              type="number"
+                                              min="1"
+                                              value={newApparelQty}
+                                              onChange={(e) => setNewApparelQty(e.target.value)}
+                                              className="h-9 border-slate-200 bg-white text-xs text-center"
+                                            />
+                                          </div>
+
+                                          {/* Allocation Note */}
+                                          <div className="md:col-span-3 space-y-1.5">
+                                            <Label htmlFor={`apparel-notes-${trainer.id}`} className="text-xs font-semibold text-slate-700">Notes / Date Allocated</Label>
+                                            <Input 
+                                              id={`apparel-notes-${trainer.id}`}
+                                              placeholder="e.g., Issued on hire" 
+                                              value={newApparelNotes}
+                                              onChange={(e) => setNewApparelNotes(e.target.value)}
+                                              className="h-9 border-slate-200 bg-white text-xs"
+                                            />
+                                          </div>
+                                        </div>
+
+                                        <div className="flex justify-end pt-1">
+                                          <Button 
+                                            onClick={() => {
+                                              const qty = parseInt(newApparelQty, 10) || 1;
+                                              handleAddApparel(trainer.id, newApparelName, qty, newApparelSize, newApparelNotes);
+                                              setNewApparelName('');
+                                              setNewApparelQty('1');
+                                              setNewApparelSize('M');
+                                              setNewApparelNotes('');
+                                            }}
+                                            className="bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs h-9 px-4 rounded-md flex items-center gap-1.5 shadow-sm"
+                                          >
+                                            <Shirt className="w-3.5 h-3.5" />
+                                            Record Apparel
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
 
                                 {/* Right Side: Forms and Side Panels */}

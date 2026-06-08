@@ -83,6 +83,14 @@ export interface StaffCheckIn {
   createdByName: string;
 }
 
+export interface StaffApparelItem {
+  id: string;
+  name: string;
+  quantity: number;
+  size?: string;
+  notes?: string;
+}
+
 export interface Trainer {
   id: string;
   name: string;
@@ -94,6 +102,7 @@ export interface Trainer {
   checkIns?: StaffCheckIn[];
   birthday?: string;
   workAnniversary?: string;
+  apparel?: StaffApparelItem[];
 }
 
 export interface Alert {
