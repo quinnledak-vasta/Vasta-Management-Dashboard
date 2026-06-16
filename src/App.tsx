@@ -2157,7 +2157,43 @@ function AppContent() {
                   {selectedReportLocation && (
                     <div className="space-y-4">
                       <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Items at {selectedReportLocation}</h4>
+                        <div className="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
+                          <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Items at {selectedReportLocation}</h4>
+                          <div className="flex items-center gap-1.5 pb-0.5">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-[10px] px-2 py-0.5 font-bold border-slate-200 hover:bg-slate-100 bg-white text-slate-700 hover:text-slate-900 shadow-xs"
+                              onClick={() => {
+                                const currentLocItems = inventoryItems.filter(item => item.location === selectedReportLocation);
+                                const nextState = { ...auditedItemIds };
+                                currentLocItems.forEach(item => {
+                                  nextState[item.id] = true;
+                                });
+                                setAuditedItemIds(nextState);
+                              }}
+                            >
+                              Check All
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-[10px] px-2 py-0.5 font-bold border-slate-200 hover:bg-slate-100 bg-white text-slate-700 hover:text-slate-900 shadow-xs"
+                              onClick={() => {
+                                const currentLocItems = inventoryItems.filter(item => item.location === selectedReportLocation);
+                                const nextState = { ...auditedItemIds };
+                                currentLocItems.forEach(item => {
+                                  nextState[item.id] = false;
+                                });
+                                setAuditedItemIds(nextState);
+                              }}
+                            >
+                              Uncheck All
+                            </Button>
+                          </div>
+                        </div>
                         <div className="space-y-3">
                           {inventoryItems
                             .filter(item => item.location === selectedReportLocation)
