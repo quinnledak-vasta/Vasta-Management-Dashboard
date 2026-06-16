@@ -106,6 +106,7 @@ import {
   Timestamp,
   setDoc,
   getDocFromServer,
+  getDoc,
   arrayUnion,
   where,
   or,
@@ -367,6 +368,90 @@ function AppContent() {
     });
     return () => unsubscribe();
   }, [user]);
+
+  // Handle direct url actions (Approve / Reject Vacation from email)
+  useEffect(() => {
+    if (!user || !isAdmin) return;
+    
+    const processQueryActions = async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const action = params.get('action');
+        const vacationId = params.get('vacationId');
+        
+        if (action && vacationId && (action === 'approve' || action === 'reject')) {
+          const targetStatus = action === 'approve' ? 'approved' : 'rejected';
+          
+          // Show non-blocking toast warning that we are updating
+          const toastId = toast.loading(`Processing vacation request ${targetStatus}...`);
+          
+          const vacationRef = doc(db, 'vacations', vacationId);
+          const vacationDoc = await getDoc(vacationRef);
+          
+          if (!vacationDoc.exists()) {
+            toast.error("Vacation request not found or has been deleted.", { id: toastId });
+            return;
+          }
+          
+          const vData = vacationDoc.data() as VacationRequest;
+          if (vData.status === targetStatus) {
+            toast.info(`Request was already ${targetStatus}.`, { id: toastId });
+          } else {
+            // Perform Firestore update
+            await updateDoc(vacationRef, { status: targetStatus });
+            toast.success(`Vacation request successfully ${targetStatus}!`, { id: toastId });
+            
+            // Queue an email notification back to the staff member who requested
+            if (vData.userId) {
+              const userRef = doc(db, 'users', vData.userId);
+              const userDocSnapshot = await getDoc(userRef);
+              if (userDocSnapshot.exists()) {
+                const trainerData = userDocSnapshot.data() as Trainer;
+                if (trainerData.email) {
+                  try {
+                    await addDoc(collection(db, 'mail'), {
+                      to: trainerData.email,
+                      message: {
+                        subject: `Vacation Request ${targetStatus.charAt(0).toUpperCase() + targetStatus.slice(1)}`,
+                        html: `
+                          <div style="font-family: sans-serif; padding: 25px; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+                            <div style="text-align: center; margin-bottom: 20px;">
+                              <span style="font-weight: bold; font-size: 20px; color: #ef4444; letter-spacing: -0.5px;">Vasta Personal Training</span>
+                            </div>
+                            <h2 style="color: ${targetStatus === 'approved' ? '#16a34a' : '#dc2626'}; font-size: 18px; margin-top: 0; border-bottom: 1px solid #f1f5f9; padding-bottom: 12px; font-weight: 700;">
+                              Vacation Request ${targetStatus.charAt(0).toUpperCase() + targetStatus.slice(1)}
+                            </h2>
+                            <p style="font-size: 14px; line-height: 1.5; color: #334155;">Hi <strong>${trainerData.name}</strong>,</p>
+                            <p style="font-size: 14px; line-height: 1.5; color: #334155;">
+                              Your vacation request for <strong>${new Date(vData.startDate).toLocaleDateString()} to ${new Date(vData.endDate).toLocaleDateString()}</strong> has been <strong>${targetStatus}</strong> by an administrator.
+                            </p>
+                            <p style="font-size: 14px; line-height: 1.5; color: #334155;">Please log in to the dashboard for more details.</p>
+                            <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+                            <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                          </div>
+                        `
+                      }
+                    });
+                  } catch (mailErr) {
+                    console.error("Failed to enqueue status update mail:", mailErr);
+                  }
+                }
+              }
+            }
+          }
+          
+          // Clean parameters from the URL so it doesn't process again
+          const newUrl = window.location.pathname + '?tab=vacations';
+          window.history.replaceState({}, '', newUrl);
+        }
+      } catch (err) {
+        console.error("Error executing direct vacation URL action:", err);
+        toast.error("Failed to execute request action. Please try manually.");
+      }
+    };
+    
+    processQueryActions();
+  }, [user, isAdmin]);
 
   // Fetch Alerts from Firestore - REMOVED (Keeping communication app-based)
   /*
@@ -1147,7 +1232,7 @@ function AppContent() {
           createdAt: new Date().toISOString(),
           totalDays
         };
-        await addDoc(collection(db, 'vacations'), vacationData);
+        const vacationDocRef = await addDoc(collection(db, 'vacations'), vacationData);
         toast.success("Vacation request submitted");
 
         // Send email alerts to location admins and owners
@@ -1157,7 +1242,10 @@ function AppContent() {
             t.role === 'owner'
           );
 
-          const approvalLink = `${window.location.origin || 'https://vasta-dashboard.web.app'}/?tab=vacations`;
+          const baseUrl = window.location.origin || 'https://vasta-dashboard.web.app';
+          const approvalLink = `${baseUrl}/?tab=vacations`;
+          const approveLink = `${baseUrl}/?tab=vacations&action=approve&vacationId=${vacationDocRef.id}`;
+          const rejectLink = `${baseUrl}/?tab=vacations&action=reject&vacationId=${vacationDocRef.id}`;
 
           for (const recipient of recipients) {
             if (recipient.email) {
@@ -1182,14 +1270,21 @@ function AppContent() {
                         <p style="margin: 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Notes:</strong> ${vacationData.notes || 'No notes provided.'}</p>
                       </div>
 
-                      <p style="font-size: 14px; line-height: 1.5; color: #334155; margin-bottom: 20px;">Review and process this request instantly using the button below:</p>
+                      <p style="font-size: 14px; line-height: 1.5; color: #334155; margin-bottom: 20px;">
+                        Review and process this request instantly by clicking one of the buttons below:
+                      </p>
                       
                       <div style="text-align: center; margin: 24px 0;">
-                        <a href="${approvalLink}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 28px; font-weight: bold; border-radius: 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">Review & Process Request</a>
+                        <a href="${approveLink}" style="display: inline-block; background-color: #16a34a; color: #ffffff; text-decoration: none; padding: 12px 24px; font-weight: bold; border-radius: 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(22,163,74,0.15); margin-right: 12px; margin-bottom: 10px;">✔ Approve Request</a>
+                        <a href="${rejectLink}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 24px; font-weight: bold; border-radius: 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(220,38,38,0.15); margin-bottom: 10px;">✘ Reject Request</a>
                       </div>
 
+                      <p style="font-size: 12px; color: #64748b; text-align: center; margin-top: 10px; font-style: italic;">
+                        Clicking either option will prompt you to securely sign in (if not already) and auto-execute the action directly on the dashboard.
+                      </p>
+
                       <p style="font-size: 11px; color: #94a3b8; line-height: 1.4; margin-top: 25px; border-top: 1px solid #f1f5f9; padding-top: 15px;">
-                        If the button above does not load correctly, please copy and paste this link into your web browser:<br />
+                        Or, view all requests in the dashboard:<br />
                         <a href="${approvalLink}" style="color: #dc2626; word-break: break-all;">${approvalLink}</a>
                       </p>
                       
