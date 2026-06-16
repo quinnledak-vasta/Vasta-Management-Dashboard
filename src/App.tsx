@@ -218,7 +218,21 @@ function AppContent() {
   const [inventoryReports, setInventoryReports] = useState<InventoryReport[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   
-  const [activeTab, setActiveTab] = useState('tasks');
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab');
+      const validTabs = ['tasks', 'team', 'staff', 'vacations', 'inventory', 'resources'];
+      if (tabParam && validTabs.includes(tabParam)) return tabParam;
+      if (window.location.hash) {
+        const hashTab = window.location.hash.replace('#', '');
+        if (validTabs.includes(hashTab)) return hashTab;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return 'tasks';
+  });
   const [certSearchQuery, setCertSearchQuery] = useState('');
   const [expandedTrainerId, setExpandedTrainerId] = useState<string | null>(null);
   const [expandedCheckInTrainerId, setExpandedCheckInTrainerId] = useState<string | null>(null);
@@ -1143,6 +1157,8 @@ function AppContent() {
             t.role === 'owner'
           );
 
+          const approvalLink = `${window.location.origin || 'https://vasta-dashboard.web.app'}/?tab=vacations`;
+
           for (const recipient of recipients) {
             if (recipient.email) {
               await addDoc(collection(db, 'mail'), {
@@ -1150,20 +1166,35 @@ function AppContent() {
                 message: {
                   subject: `New Vacation Request: ${selectedTrainer?.name}`,
                   html: `
-                    <div style="font-family: sans-serif; padding: 20px; color: #333;">
-                      <h2 style="color: #ef4444;">New Vacation Request</h2>
-                      <p>Hi <strong>${recipient.name}</strong>,</p>
-                      <p><strong>${selectedTrainer?.name}</strong> has submitted a new vacation request for your review.</p>
-                      <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
-                        <p><strong>Staff Member:</strong> ${selectedTrainer?.name}</p>
-                        <p><strong>Location:</strong> ${selectedTrainer?.location || 'N/A'}</p>
-                        <p><strong>Dates:</strong> ${new Date(vacationData.startDate).toLocaleDateString()} to ${new Date(vacationData.endDate).toLocaleDateString()}</p>
-                        <p><strong>Type:</strong> ${vacationData.type.charAt(0).toUpperCase() + vacationData.type.slice(1)}</p>
-                        <p><strong>Notes:</strong> ${vacationData.notes || 'No notes provided.'}</p>
+                    <div style="font-family: sans-serif; padding: 25px; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+                      <div style="text-align: center; margin-bottom: 20px;">
+                        <span style="font-weight: bold; font-size: 20px; color: #dc2626; letter-spacing: -0.5px;">Vasta Personal Training</span>
                       </div>
-                      <p>Please log in to the dashboard to approve or reject this request.</p>
-                      <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                      <p style="font-size: 12px; color: #94a3b8;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                      <h2 style="color: #0f172a; font-size: 18px; margin-top: 0; border-bottom: 1px solid #f1f5f9; padding-bottom: 12px; font-weight: 700;">New Vacation Request</h2>
+                      <p style="font-size: 14px; line-height: 1.5; color: #334155;">Hi <strong>${recipient.name}</strong>,</p>
+                      <p style="font-size: 14px; line-height: 1.5; color: #334155;"><strong>${selectedTrainer?.name}</strong> has submitted a new vacation request for your review.</p>
+                      
+                      <div style="background-color: #f8fafc; padding: 18px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                        <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Staff Member:</strong> ${selectedTrainer?.name}</p>
+                        <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Location:</strong> ${selectedTrainer?.location || 'N/A'}</p>
+                        <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Dates:</strong> ${new Date(vacationData.startDate).toLocaleDateString()} to ${new Date(vacationData.endDate).toLocaleDateString()}</p>
+                        <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Type:</strong> ${vacationData.type.charAt(0).toUpperCase() + vacationData.type.slice(1)}</p>
+                        <p style="margin: 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Notes:</strong> ${vacationData.notes || 'No notes provided.'}</p>
+                      </div>
+
+                      <p style="font-size: 14px; line-height: 1.5; color: #334155; margin-bottom: 20px;">Review and process this request instantly using the button below:</p>
+                      
+                      <div style="text-align: center; margin: 24px 0;">
+                        <a href="${approvalLink}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 28px; font-weight: bold; border-radius: 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">Review & Process Request</a>
+                      </div>
+
+                      <p style="font-size: 11px; color: #94a3b8; line-height: 1.4; margin-top: 25px; border-top: 1px solid #f1f5f9; padding-top: 15px;">
+                        If the button above does not load correctly, please copy and paste this link into your web browser:<br />
+                        <a href="${approvalLink}" style="color: #dc2626; word-break: break-all;">${approvalLink}</a>
+                      </p>
+                      
+                      <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+                      <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
                     </div>
                   `
                 }
