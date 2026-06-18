@@ -38,6 +38,19 @@ service cloud.firestore {
       return isEmailAdmin() || isRoleAdmin() || isRoleOwner();
     }
 
+    function isCheckInStaff() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.name.lower() == 'cole george' ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.name.lower() == 'connor lee'
+        )) ||
+        request.auth.token.email.lower() == 'cole.george@vastasports.com' ||
+        request.auth.token.email.lower() == 'connor.lee@vastasports.com' ||
+        request.auth.token.email.lower() == 'cole.george@gmail.com' ||
+        request.auth.token.email.lower() == 'connor.lee@gmail.com'
+      );
+    }
+
     function isStaff() {
       return isAdmin() || isRoleTrainer();
     }
@@ -139,7 +152,7 @@ service cloud.firestore {
       allow get: if isAuthenticated();
       allow list: if isAuthenticated();
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if (isOwner(userId) && isValidUser(request.resource.data)) || isAdmin();
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data)) || isAdmin() || (isCheckInStaff() && isValidUser(request.resource.data));
       allow delete: if isAdmin();
     }
 

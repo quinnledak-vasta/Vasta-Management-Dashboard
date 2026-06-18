@@ -203,6 +203,13 @@ export default function App() {
 function AppContent() {
   const { user, loading, logout, addInvite } = useAuth();
   const isAdmin = user?.role === 'admin' || user?.role === 'owner';
+  const canManageCheckIns = (currentUser: any, targetTrainerId: string) => {
+    if (!currentUser) return false;
+    const nameLower = currentUser.name?.toLowerCase().trim();
+    const isSpecialCheckInStaff = nameLower === 'cole george' || nameLower === 'connor lee';
+    const isUserAdmin = currentUser.role === 'admin' || currentUser.role === 'owner';
+    return isUserAdmin || isSpecialCheckInStaff || currentUser.id === targetTrainerId;
+  };
   const [tasks, setTasks] = useState<Task[]>([]);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -1035,7 +1042,7 @@ function AppContent() {
 
   const handleAddCheckIn = async (trainerId: string) => {
     if (!user) return;
-    const canEdit = isAdmin || user.id === trainerId;
+    const canEdit = canManageCheckIns(user, trainerId);
     if (!canEdit) {
       toast.error("You do not have permission to manage check-ins for this trainer");
       return;
@@ -1087,7 +1094,7 @@ function AppContent() {
 
   const handleRemoveCheckIn = async (trainerId: string, checkInId: string) => {
     if (!user) return;
-    const canEdit = isAdmin || user.id === trainerId;
+    const canEdit = canManageCheckIns(user, trainerId);
     if (!canEdit) {
       toast.error("You do not have permission to delete check-ins for this trainer");
       return;
@@ -3018,7 +3025,7 @@ function AppContent() {
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
-                            {(isAdmin || user?.id === trainer.id) && (
+                            {canManageCheckIns(user, trainer.id) && (
                               <Button 
                                 variant="outline" 
                                 onClick={() => {
@@ -3555,7 +3562,7 @@ function AppContent() {
 
                         {/* Collapsible Dropdown Area for Staff Check-Ins */}
                         <AnimatePresence initial={false}>
-                          {(expandedCheckInTrainerId === trainer.id && (isAdmin || user?.id === trainer.id)) && (
+                          {(expandedCheckInTrainerId === trainer.id && canManageCheckIns(user, trainer.id)) && (
                             <motion.div
                               initial={{ height: 0, opacity: 0 }}
                               animate={{ height: 'auto', opacity: 1 }}
