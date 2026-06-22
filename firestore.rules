@@ -81,6 +81,8 @@ service cloud.firestore {
              (data.location == null || data.location in ['Dorset Street', 'Shelburne Road', 'West Palm Beach']) &&
              (data.photoURL == null || data.photoURL is string) &&
              (data.get('certifications', null) == null || data.certifications is list) &&
+             (data.get('checkIns', null) == null || data.checkIns is list) &&
+             (data.get('checkInAlertsSent', null) == null || data.checkInAlertsSent is list) &&
              (data.get('birthday', null) == null || data.birthday is string) &&
              (data.get('workAnniversary', null) == null || data.workAnniversary is string) &&
              (data.get('apparel', null) == null || data.apparel is list);

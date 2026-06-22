@@ -639,6 +639,180 @@ function AppContent() {
     checkCerts();
   }, [user, trainers, isAdmin]);
 
+  // Check and send alerts for quarterly check-ins due at the end of a quarter or overdue
+  useEffect(() => {
+    if (!user || trainers.length === 0) return;
+
+    const checkQuarterlyReviews = async () => {
+      const today = new Date();
+      const currentMonth = today.getMonth(); // 0-11
+      const currentYear = today.getFullYear();
+      
+      // Calculate current quarter
+      const quarterNum = Math.floor(currentMonth / 3) + 1;
+      const currentQuarterStr = `Q${quarterNum} ${currentYear}`;
+      
+      // Check if it is the end of the quarter (last month of the quarter: March, June, September, December)
+      const isEndOfQuarter = (currentMonth % 3) === 2;
+
+      // Calculate previous quarter
+      let prevQuarterNum = quarterNum - 1;
+      let prevQuarterYear = currentYear;
+      if (quarterNum === 1) {
+        prevQuarterNum = 4;
+        prevQuarterYear = currentYear - 1;
+      }
+      const prevQuarterStr = `Q${prevQuarterNum} ${prevQuarterYear}`;
+
+      // Helper to convert quarter string (e.g., "Q2 2026") to comparable numeric weight
+      const getQuarterWeight = (qStr: string): number => {
+        const match = qStr.match(/^Q([1-4])\s+(\d{4})$/);
+        if (!match) return 0;
+        const q = parseInt(match[1], 10);
+        const y = parseInt(match[2], 10);
+        return y * 10 + q;
+      };
+
+      const presentQuarterWeight = getQuarterWeight("Q2 2026"); // Present quarter weight as of June 2026 implementation
+
+      for (const trainer of trainers) {
+        // Only run alerts for trainers (coaches), ignore administrators / owners themselves
+        if (trainer.role !== 'trainer') continue;
+
+        let alertsUpdated = false;
+        const currentAlertsSent = trainer.checkInAlertsSent || [];
+        const updatedAlertsSent = [...currentAlertsSent];
+
+        // 1. End of current quarter alert
+        if (isEndOfQuarter) {
+          const alertKey = `${currentQuarterStr}-end`;
+          const hasLoggedCheckIn = trainer.checkIns?.some(ci => ci.quarter === currentQuarterStr);
+          const alreadySent = currentAlertsSent.includes(alertKey);
+
+          if (!hasLoggedCheckIn && !alreadySent) {
+            // Find recipients: location manager (admin of same location) + owner
+            const recipients = trainers.filter(t => 
+              (t.role === 'admin' && trainer.location && t.location === trainer.location) || 
+              t.role === 'owner'
+            );
+
+            for (const recipient of recipients) {
+              if (recipient.email) {
+                try {
+                  await addDoc(collection(db, 'mail'), {
+                    to: recipient.email,
+                    message: {
+                      subject: `⏰ Action Required: Quarterly Check-In Due for ${trainer.name} - ${currentQuarterStr}`,
+                      html: `
+                        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+                          <div style="background-color: #f59e0b; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                            <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
+                              ⏰ Quarterly Check-In Due Soon
+                            </h2>
+                          </div>
+                          
+                          <p>Hi <strong>${recipient.name}</strong>,</p>
+                          <p>This is an automated reminder that the current quarter is ending, and a quarterly check-in for coach <strong>${trainer.name}</strong> has not yet been recorded.</p>
+                          
+                          <div style="background-color: #fffbeb; padding: 20px; border-radius: 8px; border: 1px solid #fef3c7; margin: 20px 0;">
+                            <p style="margin: 0 0 10px 0;"><strong>Coach Name:</strong> ${trainer.name}</p>
+                            <p style="margin: 0 0 10px 0;"><strong>Location:</strong> ${trainer.location || 'N/A'}</p>
+                            <p style="margin: 0 0 10px 0;"><strong>Due Quarter:</strong> ${currentQuarterStr}</p>
+                            <p style="margin: 0; font-size: 14px; font-weight: bold; color: #d97706;">Status: Missing / Pending</p>
+                          </div>
+                          
+                          <p>Please log in to the Vasta Personal Training Dashboard to conduct the check-in and record the Soap/Programming notes, or coordinate with ${trainer.name}.</p>
+                          
+                          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                          <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                        </div>
+                      `
+                    }
+                  });
+                } catch (e) {
+                  console.error("Failed to write check-in due alert email document", e);
+                }
+              }
+            }
+
+            updatedAlertsSent.push(alertKey);
+            alertsUpdated = true;
+          }
+        }
+
+        // 2. Overdue previous quarter alert (quarter ended and review not recorded)
+        const overdueAlertKey = `${prevQuarterStr}-overdue`;
+        const hasLoggedPrevCheckIn = trainer.checkIns?.some(ci => ci.quarter === prevQuarterStr);
+        const alreadySentOverdue = currentAlertsSent.includes(overdueAlertKey);
+
+        // Ensure we do not send alerts for past quarters prior to Q2 2026.
+        const isPrevQuarterBeforePresent = getQuarterWeight(prevQuarterStr) < presentQuarterWeight;
+
+        if (!hasLoggedPrevCheckIn && !alreadySentOverdue && !isPrevQuarterBeforePresent) {
+          // Find recipients: location manager (admin of same location) + owner
+          const recipients = trainers.filter(t => 
+            (t.role === 'admin' && trainer.location && t.location === trainer.location) || 
+            t.role === 'owner'
+          );
+
+          for (const recipient of recipients) {
+            if (recipient.email) {
+              try {
+                await addDoc(collection(db, 'mail'), {
+                  to: recipient.email,
+                  message: {
+                    subject: `⚠️ Overdue Check-In: ${trainer.name} - ${prevQuarterStr} Review Pending`,
+                    html: `
+                      <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+                        <div style="background-color: #ef4444; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                          <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
+                            ⚠️ Overdue Check-In Alert
+                          </h2>
+                        </div>
+                        
+                        <p>Hi <strong>${recipient.name}</strong>,</p>
+                        <p>The previous quarter has ended, but a quarterly check-in has not been recorded for coach <strong>${trainer.name}</strong>.</p>
+                        
+                        <div style="background-color: #fef2f2; padding: 20px; border-radius: 8px; border: 1px solid #fee2e2; margin: 20px 0;">
+                          <p style="margin: 0 0 10px 0;"><strong>Coach Name:</strong> ${trainer.name}</p>
+                          <p style="margin: 0 0 10px 0;"><strong>Location:</strong> ${trainer.location || 'N/A'}</p>
+                          <p style="margin: 0 0 10px 0;"><strong>Missed Quarter:</strong> ${prevQuarterStr}</p>
+                          <p style="margin: 0; font-size: 14px; font-weight: bold; color: #dc2626;">Status: OVERDUE</p>
+                        </div>
+                        
+                        <p>This check-in is now past due. Please prioritize conducting this check-in to ensure staff development files remain up to date.</p>
+                        
+                        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                        <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                      </div>
+                    `
+                  }
+                });
+              } catch (e) {
+                console.error("Failed to write overdue alert email document", e);
+              }
+            }
+          }
+
+          updatedAlertsSent.push(overdueAlertKey);
+          alertsUpdated = true;
+        }
+
+        if (alertsUpdated) {
+          try {
+            await updateDoc(doc(db, 'users', trainer.id), {
+              checkInAlertsSent: updatedAlertsSent
+            });
+          } catch (e) {
+            console.error("Failed to update check-in alert flags in Firestore", e);
+          }
+        }
+      }
+    };
+
+    checkQuarterlyReviews();
+  }, [user, trainers]);
+
   // Fetch Resources from Firestore
   useEffect(() => {
     if (!user) return;

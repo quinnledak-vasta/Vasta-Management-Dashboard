@@ -36,9 +36,11 @@
         "location": { "type": "string", "enum": ["Dorset Street", "Shelburne Road", "West Palm Beach"] },
         "photoURL": { "type": "string" },
         "certifications": { "type": "array" },
+        "checkIns": { "type": "array" },
         "birthday": { "type": "string" },
         "workAnniversary": { "type": "string" },
-        "apparel": { "type": "array" }
+        "apparel": { "type": "array" },
+        "checkInAlertsSent": { "type": "array" }
       },
       "required": ["id", "name", "email", "role"]
     },

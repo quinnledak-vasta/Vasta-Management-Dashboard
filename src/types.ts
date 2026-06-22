@@ -103,6 +103,7 @@ export interface Trainer {
   birthday?: string;
   workAnniversary?: string;
   apparel?: StaffApparelItem[];
+  checkInAlertsSent?: string[];
 }
 
 export interface Alert {
