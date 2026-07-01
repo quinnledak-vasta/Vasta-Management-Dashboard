@@ -43,7 +43,12 @@ import {
   ClipboardList,
   History,
   Cake,
-  Briefcase
+  Briefcase,
+  Megaphone,
+  GraduationCap,
+  BookOpen,
+  Play,
+  Video
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
@@ -134,7 +139,12 @@ import {
   Resource,
   Certification,
   StaffCheckIn,
-  StaffApparelItem
+  StaffApparelItem,
+  StaffEvent,
+  Course,
+  Chapter,
+  Lesson,
+  UserLessonProgress
 } from './types';
 import { GoogleGenAI } from "@google/genai";
 
@@ -226,12 +236,61 @@ function AppContent() {
   ).sort();
   const [inventoryReports, setInventoryReports] = useState<InventoryReport[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
+  const [staffEvents, setStaffEvents] = useState<StaffEvent[]>([]);
+  const [resourcesSubTab, setResourcesSubTab] = useState<'links' | 'calendar'>('links');
+  const [isNewEventOpen, setIsNewEventOpen] = useState(false);
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState<Date | null>(null);
+  const [newEvent, setNewEvent] = useState({
+    title: '',
+    description: '',
+    date: new Date().toISOString().split('T')[0],
+    type: 'outing' as 'outing' | 'meeting' | 'party' | 'other',
+    location: '',
+  });
+  const [currentCalendarMonth, setCurrentCalendarMonth] = useState<Date>(() => new Date());
+
+  // Onboarding/Education Course States
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [lessons, setLessons] = useState<Lesson[]>([]);
+  const [progressList, setProgressList] = useState<UserLessonProgress[]>([]);
+  
+  const [activeCourseId, setActiveCourseId] = useState<string | null>(null);
+  const [activeLessonId, setActiveLessonId] = useState<string | null>(null);
+  const [isOnboardingAdminMode, setIsOnboardingAdminMode] = useState(false);
+  
+  const [isNewCourseOpen, setIsNewCourseOpen] = useState(false);
+  const [isNewChapterOpen, setIsNewChapterOpen] = useState(false);
+  const [isNewLessonOpen, setIsNewLessonOpen] = useState(false);
+  const [editingLessonId, setEditingLessonId] = useState<string | null>(null);
+
+  const [newCourse, setNewCourse] = useState({
+    title: '',
+    description: '',
+    category: 'Onboarding',
+    thumbnailUrl: '',
+  });
+  const [newChapter, setNewChapter] = useState({
+    courseId: '',
+    title: '',
+    order: 1,
+  });
+  const [newLesson, setNewLesson] = useState({
+    courseId: '',
+    chapterId: '',
+    title: '',
+    description: '',
+    videoUrl: '',
+    textBody: '',
+    duration: 5,
+    order: 1,
+  });
   
   const [activeTab, setActiveTab] = useState(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get('tab');
-      const validTabs = ['tasks', 'team', 'staff', 'vacations', 'inventory', 'resources'];
+      const validTabs = ['tasks', 'team', 'staff', 'vacations', 'inventory', 'resources', 'marketing', 'onboarding'];
       if (tabParam && validTabs.includes(tabParam)) return tabParam;
       if (window.location.hash) {
         const hashTab = window.location.hash.replace('#', '');
@@ -690,10 +749,9 @@ function AppContent() {
           const alreadySent = currentAlertsSent.includes(alertKey);
 
           if (!hasLoggedCheckIn && !alreadySent) {
-            // Find recipients: location manager (admin of same location) + owner
+            // Find recipients: location manager (admin of same location)
             const recipients = trainers.filter(t => 
-              (t.role === 'admin' && trainer.location && t.location === trainer.location) || 
-              t.role === 'owner'
+              t.role === 'admin' && trainer.location && t.location === trainer.location
             );
 
             for (const recipient of recipients) {
@@ -749,10 +807,9 @@ function AppContent() {
         const isPrevQuarterBeforePresent = getQuarterWeight(prevQuarterStr) < presentQuarterWeight;
 
         if (!hasLoggedPrevCheckIn && !alreadySentOverdue && !isPrevQuarterBeforePresent) {
-          // Find recipients: location manager (admin of same location) + owner
+          // Find recipients: location manager (admin of same location)
           const recipients = trainers.filter(t => 
-            (t.role === 'admin' && trainer.location && t.location === trainer.location) || 
-            t.role === 'owner'
+            t.role === 'admin' && trainer.location && t.location === trainer.location
           );
 
           for (const recipient of recipients) {
@@ -830,6 +887,115 @@ function AppContent() {
     });
     return () => unsubscribe();
   }, [user]);
+
+  // Fetch Staff Events from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const path = 'staff_events';
+    const q = query(collection(db, path), orderBy('date', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const eventList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as StaffEvent[];
+      setStaffEvents(eventList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Onboarding Courses from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const path = 'courses';
+    const q = query(collection(db, path), orderBy('createdAt', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const courseList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Course[];
+      setCourses(courseList);
+      if (courseList.length > 0 && !activeCourseId) {
+        setActiveCourseId(courseList[0].id);
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Onboarding Chapters from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const path = 'chapters';
+    const q = query(collection(db, path), orderBy('order', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const chapterList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Chapter[];
+      setChapters(chapterList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Onboarding Lessons from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const path = 'lessons';
+    const q = query(collection(db, path), orderBy('order', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const lessonList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Lesson[];
+      setLessons(lessonList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Onboarding User Progress from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const path = 'course_progress';
+    const q = query(collection(db, path), where('userId', '==', user.id));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const progressList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as UserLessonProgress[];
+      setProgressList(progressList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Set active lesson automatically
+  useEffect(() => {
+    if (activeCourseId && (!activeLessonId || !lessons.some(l => l.id === activeLessonId && l.courseId === activeCourseId))) {
+      const courseChapters = chapters.filter(c => c.courseId === activeCourseId).sort((a,b) => a.order - b.order);
+      if (courseChapters.length > 0) {
+        for (const chap of courseChapters) {
+          const chapLessons = lessons.filter(l => l.chapterId === chap.id).sort((a,b) => a.order - b.order);
+          if (chapLessons.length > 0) {
+            setActiveLessonId(chapLessons[0].id);
+            break;
+          }
+        }
+      }
+    }
+  }, [activeCourseId, activeLessonId, chapters, lessons]);
 
   // Fetch Vacations from Firestore
   useEffect(() => {
@@ -1350,6 +1516,288 @@ function AppContent() {
       toast.success("Resource deleted successfully");
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `resources/${resourceId}`);
+    }
+  };
+
+  const handleCreateStaffEvent = async () => {
+    if (!user) return;
+    if (!newEvent.title || !newEvent.date) {
+      toast.error("Please provide both a title and a date");
+      return;
+    }
+
+    try {
+      const eventData = {
+        title: newEvent.title,
+        description: newEvent.description || '',
+        date: newEvent.date,
+        type: newEvent.type,
+        location: newEvent.location || '',
+        createdAt: new Date().toISOString(),
+        createdBy: user.id,
+        createdByName: user.name || user.email || 'Unknown',
+      };
+
+      await addDoc(collection(db, 'staff_events'), eventData);
+      setNewEvent({
+        title: '',
+        description: '',
+        date: new Date().toISOString().split('T')[0],
+        type: 'outing',
+        location: '',
+      });
+      setIsNewEventOpen(false);
+      toast.success("Staff event created successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'staff_events');
+    }
+  };
+
+  const handleDeleteStaffEvent = async (eventId: string) => {
+    if (!user) return;
+    if (!window.confirm("Are you sure you want to delete this event?")) return;
+
+    try {
+      await deleteDoc(doc(db, 'staff_events', eventId));
+      toast.success("Staff event deleted successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `staff_events/${eventId}`);
+    }
+  };
+
+  const handleCreateCourse = async () => {
+    if (!user || !isAdmin) return;
+    if (!newCourse.title || !newCourse.description) {
+      toast.error("Please provide a title and description for the course");
+      return;
+    }
+
+    try {
+      const courseData = {
+        title: newCourse.title,
+        description: newCourse.description,
+        category: newCourse.category || 'Onboarding',
+        thumbnailUrl: newCourse.thumbnailUrl || '',
+        createdAt: new Date().toISOString(),
+        createdBy: user.id,
+      };
+
+      const docRef = await addDoc(collection(db, 'courses'), courseData);
+      setNewCourse({
+        title: '',
+        description: '',
+        category: 'Onboarding',
+        thumbnailUrl: '',
+      });
+      setIsNewCourseOpen(false);
+      setActiveCourseId(docRef.id);
+      toast.success("Course created successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'courses');
+    }
+  };
+
+  const handleDeleteCourse = async (courseId: string) => {
+    if (!user || !isAdmin) return;
+    if (!window.confirm("Are you sure you want to delete this course? All chapters, lessons, and user progress records associated with it will be lost.")) return;
+
+    try {
+      await deleteDoc(doc(db, 'courses', courseId));
+      
+      // Delete associated chapters
+      const chapsToDelete = chapters.filter(c => c.courseId === courseId);
+      for (const chap of chapsToDelete) {
+        await deleteDoc(doc(db, 'chapters', chap.id));
+      }
+
+      // Delete associated lessons
+      const lessonsToDelete = lessons.filter(l => l.courseId === courseId);
+      for (const les of lessonsToDelete) {
+        await deleteDoc(doc(db, 'lessons', les.id));
+      }
+
+      if (activeCourseId === courseId) {
+        setActiveCourseId(null);
+        setActiveLessonId(null);
+      }
+      toast.success("Course and all associated content deleted successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `courses/${courseId}`);
+    }
+  };
+
+  const handleCreateChapter = async () => {
+    if (!user || !isAdmin) return;
+    const courseId = activeCourseId || newChapter.courseId;
+    if (!courseId) {
+      toast.error("Please select a course first");
+      return;
+    }
+    if (!newChapter.title) {
+      toast.error("Please enter a chapter title");
+      return;
+    }
+
+    try {
+      const chapterData = {
+        courseId,
+        title: newChapter.title,
+        order: Number(newChapter.order) || 1,
+        createdAt: new Date().toISOString(),
+      };
+
+      await addDoc(collection(db, 'chapters'), chapterData);
+      setNewChapter({
+        courseId: '',
+        title: '',
+        order: (chapters.filter(c => c.courseId === courseId).length + 2),
+      });
+      setIsNewChapterOpen(false);
+      toast.success("Chapter created successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'chapters');
+    }
+  };
+
+  const handleDeleteChapter = async (chapterId: string) => {
+    if (!user || !isAdmin) return;
+    if (!window.confirm("Are you sure you want to delete this chapter? All lessons inside this chapter will be deleted.")) return;
+
+    try {
+      await deleteDoc(doc(db, 'chapters', chapterId));
+
+      // Delete lessons in this chapter
+      const lessonsToDelete = lessons.filter(l => l.chapterId === chapterId);
+      for (const les of lessonsToDelete) {
+        await deleteDoc(doc(db, 'lessons', les.id));
+      }
+      
+      toast.success("Chapter deleted successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `chapters/${chapterId}`);
+    }
+  };
+
+  const handleCreateLesson = async () => {
+    if (!user || !isAdmin) return;
+    const courseId = activeCourseId;
+    const chapterId = newLesson.chapterId;
+    if (!courseId || !chapterId) {
+      toast.error("Please select a chapter first");
+      return;
+    }
+    if (!newLesson.title) {
+      toast.error("Please provide a lesson title");
+      return;
+    }
+
+    try {
+      const lessonData = {
+        courseId,
+        chapterId,
+        title: newLesson.title,
+        description: newLesson.description || '',
+        videoUrl: newLesson.videoUrl || '',
+        textBody: newLesson.textBody || '',
+        duration: Number(newLesson.duration) || 5,
+        order: Number(newLesson.order) || 1,
+        createdAt: new Date().toISOString(),
+      };
+
+      await addDoc(collection(db, 'lessons'), lessonData);
+      setNewLesson({
+        courseId: '',
+        chapterId: '',
+        title: '',
+        description: '',
+        videoUrl: '',
+        textBody: '',
+        duration: 5,
+        order: (lessons.filter(l => l.chapterId === chapterId).length + 2),
+      });
+      setIsNewLessonOpen(false);
+      toast.success("Lesson created successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'lessons');
+    }
+  };
+
+  const handleDeleteLesson = async (lessonId: string) => {
+    if (!user || !isAdmin) return;
+    if (!window.confirm("Are you sure you want to delete this lesson?")) return;
+
+    try {
+      await deleteDoc(doc(db, 'lessons', lessonId));
+      if (activeLessonId === lessonId) {
+        setActiveLessonId(null);
+      }
+      toast.success("Lesson deleted successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `lessons/${lessonId}`);
+    }
+  };
+
+  const handleToggleLessonProgress = async (lessonId: string, courseId: string) => {
+    if (!user) return;
+    const progressId = `${user.id}_${lessonId}`;
+    const existing = progressList.find(p => p.lessonId === lessonId);
+
+    try {
+      if (existing) {
+        // Toggle completion
+        await deleteDoc(doc(db, 'course_progress', existing.id));
+        toast.success("Lesson marked as incomplete");
+      } else {
+        // Create progress record
+        const progressData: UserLessonProgress = {
+          id: progressId,
+          userId: user.id,
+          courseId,
+          lessonId,
+          completed: true,
+          completedAt: new Date().toISOString(),
+        };
+        await setDoc(doc(db, 'course_progress', progressId), progressData);
+        toast.success("Lesson marked as completed! 🎉");
+      }
+    } catch (error) {
+      console.error(error);
+      handleFirestoreError(error, OperationType.WRITE, 'course_progress');
+    }
+  };
+
+  const handleUpdateLesson = async () => {
+    if (!user || !isAdmin || !editingLessonId) return;
+    if (!newLesson.title) {
+      toast.error("Please provide a lesson title");
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'lessons', editingLessonId), {
+        title: newLesson.title,
+        description: newLesson.description || '',
+        videoUrl: newLesson.videoUrl || '',
+        textBody: newLesson.textBody || '',
+        duration: Number(newLesson.duration) || 5,
+        order: Number(newLesson.order) || 1,
+      });
+
+      setNewLesson({
+        courseId: '',
+        chapterId: '',
+        title: '',
+        description: '',
+        videoUrl: '',
+        textBody: '',
+        duration: 5,
+        order: 1,
+      });
+      setEditingLessonId(null);
+      setIsNewLessonOpen(false);
+      toast.success("Lesson updated successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `lessons/${editingLessonId}`);
     }
   };
 
@@ -1928,6 +2376,20 @@ function AppContent() {
             <ExternalLink className="w-5 h-5" />
             <span>Resources</span>
           </button>
+          <button 
+            onClick={() => setActiveTab('marketing')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'marketing' ? 'bg-red-50 text-red-700 font-semibold' : 'text-slate-600 hover:bg-slate-50'}`}
+          >
+            <Megaphone className="w-5 h-5" />
+            <span>Marketing</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('onboarding')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'onboarding' ? 'bg-red-50 text-red-700 font-semibold' : 'text-slate-600 hover:bg-slate-50'}`}
+          >
+            <GraduationCap className="w-5 h-5" />
+            <span>Onboarding/Education</span>
+          </button>
         </nav>
 
         <div className="p-4 border-t border-slate-100">
@@ -1958,6 +2420,8 @@ function AppContent() {
               {activeTab === 'inventory' && 'Inventory Management'}
               {activeTab === 'vacations' && 'Vacations & Time-off'}
               {activeTab === 'resources' && 'Team Resources'}
+              {activeTab === 'marketing' && 'Marketing'}
+              {activeTab === 'onboarding' && 'Onboarding & Team Education'}
             </h2>
             <p className="text-slate-500 mt-1">
               {activeTab === 'tasks' && 'Assign and track progress of team operations.'}
@@ -1966,10 +2430,61 @@ function AppContent() {
               {activeTab === 'inventory' && 'Track equipment, retail items, and staff supplies.'}
               {activeTab === 'vacations' && 'Track approved and pending time-off requests.'}
               {activeTab === 'resources' && 'Quick access to frequently used Google Docs and links.'}
+              {activeTab === 'marketing' && 'Google Sheets based campaign tracker and resource.'}
+              {activeTab === 'onboarding' && 'Complete your onboarding modules, watch instruction videos, and track your progress.'}
             </p>
           </div>
 
           <div className="flex gap-3">
+            {activeTab === 'onboarding' && (
+              <div className="flex items-center gap-2">
+                {isAdmin && (
+                  <Button
+                    onClick={() => setIsOnboardingAdminMode(!isOnboardingAdminMode)}
+                    variant="outline"
+                    className="border-slate-200 text-xs font-semibold"
+                  >
+                    {isOnboardingAdminMode ? '👁️ Learner Mode' : '⚙️ Course Builder Mode'}
+                  </Button>
+                )}
+                {isOnboardingAdminMode && isAdmin && (
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => setIsNewCourseOpen(true)}
+                      className="bg-red-600 hover:bg-red-700 text-xs font-semibold"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" /> Course
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        if (courses.length === 0) {
+                          toast.error("Please create a course first");
+                          return;
+                        }
+                        setIsNewChapterOpen(true);
+                      }}
+                      variant="outline"
+                      className="text-xs font-semibold border-slate-200"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" /> Chapter
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        if (chapters.length === 0) {
+                          toast.error("Please create a chapter first");
+                          return;
+                        }
+                        setIsNewLessonOpen(true);
+                      }}
+                      variant="outline"
+                      className="text-xs font-semibold border-slate-200"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" /> Lesson
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
             {activeTab === 'tasks' && (
               <Dialog open={isNewTaskOpen} onOpenChange={setIsNewTaskOpen}>
                 <DialogTrigger
@@ -2080,58 +2595,142 @@ function AppContent() {
               </Dialog>
             )}
 
-            {activeTab === 'resources' && isAdmin && (
-              <Dialog open={isNewResourceOpen} onOpenChange={setIsNewResourceOpen}>
-                <DialogTrigger
-                  render={
-                    <Button className="bg-red-600 hover:bg-red-700 shadow-md shadow-red-100 gap-2">
-                      <Plus className="w-4 h-4" />
-                      Add Resource
-                    </Button>
-                  }
-                />
-                <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>Add New Resource</DialogTitle>
-                    <DialogDescription>
-                      Add a link to a Google Doc or other frequently used team resource.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="grid gap-4 py-4">
-                    <div className="grid gap-2">
-                      <Label htmlFor="res-title">Title</Label>
-                      <Input 
-                        id="res-title" 
-                        placeholder="e.g. Staff Handbook" 
-                        value={newResource.title}
-                        onChange={(e) => setNewResource({ ...newResource, title: e.target.value })}
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="res-url">URL</Label>
-                      <Input 
-                        id="res-url" 
-                        placeholder="docs.google.com/..." 
-                        value={newResource.url}
-                        onChange={(e) => setNewResource({ ...newResource, url: e.target.value })}
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="res-category">Category (Optional)</Label>
-                      <Input 
-                        id="res-category" 
-                        placeholder="e.g. Training, Admin, Guides" 
-                        value={newResource.category}
-                        onChange={(e) => setNewResource({ ...newResource, category: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsNewResourceOpen(false)}>Cancel</Button>
-                    <Button onClick={handleCreateResource} className="bg-red-600 hover:bg-red-700">Add Link</Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
+            {activeTab === 'resources' && (
+              <div className="flex gap-2">
+                {resourcesSubTab === 'links' && isAdmin && (
+                  <Dialog open={isNewResourceOpen} onOpenChange={setIsNewResourceOpen}>
+                    <DialogTrigger
+                      render={
+                        <Button className="bg-red-600 hover:bg-red-700 shadow-md shadow-red-100 gap-2">
+                          <Plus className="w-4 h-4" />
+                          Add Resource
+                        </Button>
+                      }
+                    />
+                    <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
+                      <DialogHeader>
+                        <DialogTitle>Add New Resource</DialogTitle>
+                        <DialogDescription>
+                          Add a link to a Google Doc or other frequently used team resource.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
+                        <div className="grid gap-2">
+                          <Label htmlFor="res-title">Title</Label>
+                          <Input 
+                            id="res-title" 
+                            placeholder="e.g. Staff Handbook" 
+                            value={newResource.title}
+                            onChange={(e) => setNewResource({ ...newResource, title: e.target.value })}
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="res-url">URL</Label>
+                          <Input 
+                            id="res-url" 
+                            placeholder="docs.google.com/..." 
+                            value={newResource.url}
+                            onChange={(e) => setNewResource({ ...newResource, url: e.target.value })}
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="res-category">Category (Optional)</Label>
+                          <Input 
+                            id="res-category" 
+                            placeholder="e.g. Training, Admin, Guides" 
+                            value={newResource.category}
+                            onChange={(e) => setNewResource({ ...newResource, category: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsNewResourceOpen(false)}>Cancel</Button>
+                        <Button onClick={handleCreateResource} className="bg-red-600 hover:bg-red-700">Add Link</Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                )}
+
+                {resourcesSubTab === 'calendar' && (
+                  <Dialog open={isNewEventOpen} onOpenChange={setIsNewEventOpen}>
+                    <DialogTrigger
+                      render={
+                        <Button className="bg-red-600 hover:bg-red-700 shadow-md shadow-red-100 gap-2">
+                          <Plus className="w-4 h-4" />
+                          Add Staff Event
+                        </Button>
+                      }
+                    />
+                    <DialogContent className="sm:max-w-[450px] max-h-[90vh] overflow-y-auto">
+                      <DialogHeader>
+                        <DialogTitle>Add Staff Event</DialogTitle>
+                        <DialogDescription>
+                          Create a new team outing, staff meeting, or other event.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
+                        <div className="grid gap-2">
+                          <Label htmlFor="event-title">Event Title</Label>
+                          <Input 
+                            id="event-title" 
+                            placeholder="e.g. Team Dinner & Bowling" 
+                            value={newEvent.title}
+                            onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })}
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="event-date">Date</Label>
+                          <Input 
+                            id="event-date" 
+                            type="date"
+                            value={newEvent.date}
+                            onChange={(e) => setNewEvent({ ...newEvent, date: e.target.value })}
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="event-type">Type</Label>
+                          <Select 
+                            value={newEvent.type} 
+                            onValueChange={(val: 'outing' | 'meeting' | 'party' | 'other') => setNewEvent({ ...newEvent, type: val })}
+                          >
+                            <SelectTrigger id="event-type">
+                              <SelectValue placeholder="Select type" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="outing">Team Outing</SelectItem>
+                              <SelectItem value="meeting">Staff Meeting</SelectItem>
+                              <SelectItem value="party">Staff Party</SelectItem>
+                              <SelectItem value="other">Other Event</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="event-location">Location (Optional)</Label>
+                          <Input 
+                            id="event-location" 
+                            placeholder="e.g. Dorset Street gym" 
+                            value={newEvent.location}
+                            onChange={(e) => setNewEvent({ ...newEvent, location: e.target.value })}
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="event-desc">Description (Optional)</Label>
+                          <Textarea 
+                            id="event-desc" 
+                            placeholder="Add details about the event..." 
+                            value={newEvent.description}
+                            onChange={(e) => setNewEvent({ ...newEvent, description: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsNewEventOpen(false)}>Cancel</Button>
+                        <Button onClick={handleCreateStaffEvent} className="bg-red-600 hover:bg-red-700">Create Event</Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                )}
+              </div>
             )}
 
             {activeTab === 'inventory' && (
@@ -4277,87 +4876,1168 @@ function AppContent() {
               exit={{ opacity: 0, x: -20 }}
               className="space-y-6"
             >
-              <div className="flex items-center gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <Input 
-                    placeholder="Search resources..." 
-                    className="pl-10 border-none bg-transparent focus-visible:ring-0"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                  />
-                </div>
+              {/* Resources Sub-tabs Switcher */}
+              <div className="flex border-b border-slate-200 pb-px mb-6">
+                <button
+                  onClick={() => setResourcesSubTab('links')}
+                  className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+                    resourcesSubTab === 'links' 
+                      ? 'border-red-600 text-red-600' 
+                      : 'border-transparent text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <Link className="w-4 h-4" />
+                  Resource Links
+                </button>
+                <button
+                  onClick={() => setResourcesSubTab('calendar')}
+                  className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+                    resourcesSubTab === 'calendar' 
+                      ? 'border-red-600 text-red-600' 
+                      : 'border-transparent text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <CalendarDays className="w-4 h-4" />
+                  Staff Events Calendar
+                </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {resources
-                  .filter(res => 
-                    res.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    res.category?.toLowerCase().includes(searchQuery.toLowerCase())
-                  )
-                  .map(resource => (
-                    <Card key={resource.id} className="group hover:shadow-lg transition-all duration-300 border-slate-200 bg-white overflow-hidden flex flex-col">
-                      <div className="h-2 bg-red-600" />
-                      <CardHeader className="p-5 pb-2">
-                        <div className="flex justify-between items-start mb-2">
-                          <Badge variant="outline" className="text-[10px] uppercase font-bold border-red-100 text-red-600 bg-red-50/50">
-                            {resource.category || 'General'}
-                          </Badge>
-                          {isAdmin && (
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              className="h-7 w-7 p-0 text-slate-300 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={() => handleDeleteResource(resource.id)}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          )}
-                        </div>
-                        <CardTitle className="text-lg font-bold text-slate-900 group-hover:text-red-700 transition-colors line-clamp-2 min-h-[3.5rem] flex items-center">
-                          {resource.title}
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="p-5 pt-0 flex-1 flex flex-col justify-end">
-                        <div className="flex flex-col gap-4 mt-4">
-                          <div className="flex items-center gap-2 text-slate-400 text-[10px] font-medium">
-                            <Clock className="w-3 h-3" />
-                            <span>Added {format(parseISO(resource.createdAt), 'MMM d, yyyy')}</span>
-                          </div>
-                          <a 
-                            href={resource.url} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="w-full inline-flex items-center justify-center gap-2 bg-slate-900 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-slate-800 transition-all shadow-md active:scale-95"
+              {resourcesSubTab === 'links' ? (
+                <>
+                  <div className="flex items-center gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <Input 
+                        placeholder="Search resources..." 
+                        className="pl-10 border-none bg-transparent focus-visible:ring-0"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    {resources
+                      .filter(res => 
+                        res.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                        res.category?.toLowerCase().includes(searchQuery.toLowerCase())
+                      )
+                      .map(resource => (
+                        <Card key={resource.id} className="group hover:shadow-lg transition-all duration-300 border-slate-200 bg-white overflow-hidden flex flex-col">
+                          <div className="h-2 bg-red-600" />
+                          <CardHeader className="p-5 pb-2">
+                            <div className="flex justify-between items-start mb-2">
+                              <Badge variant="outline" className="text-[10px] uppercase font-bold border-red-100 text-red-600 bg-red-50/50">
+                                {resource.category || 'General'}
+                              </Badge>
+                              {isAdmin && (
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  className="h-7 w-7 p-0 text-slate-300 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  onClick={() => handleDeleteResource(resource.id)}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </Button>
+                              )}
+                            </div>
+                            <CardTitle className="text-lg font-bold text-slate-900 group-hover:text-red-700 transition-colors line-clamp-2 min-h-[3.5rem] flex items-center">
+                              {resource.title}
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="p-5 pt-0 flex-1 flex flex-col justify-end">
+                            <div className="flex flex-col gap-4 mt-4">
+                              <div className="flex items-center gap-2 text-slate-400 text-[10px] font-medium">
+                                <Clock className="w-3 h-3" />
+                                <span>Added {format(parseISO(resource.createdAt), 'MMM d, yyyy')}</span>
+                              </div>
+                              <a 
+                                href={resource.url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="w-full inline-flex items-center justify-center gap-2 bg-slate-900 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-slate-800 transition-all shadow-md active:scale-95"
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                                Open Document
+                              </a>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    {resources.length === 0 && (
+                      <div className="col-span-full py-20 text-center bg-white rounded-3xl border-2 border-dashed border-slate-100 shadow-sm">
+                        <FileText className="w-16 h-16 text-slate-200 mx-auto mb-4" />
+                        <h4 className="text-lg font-bold text-slate-400">No Resources Yet</h4>
+                        <p className="text-slate-400 text-sm max-w-xs mx-auto mt-1">
+                          Start adding frequently used Google Docs, spreadsheets, or important links for your team.
+                        </p>
+                        {isAdmin && (
+                          <Button 
+                            onClick={() => setIsNewResourceOpen(true)}
+                            variant="link" 
+                            className="mt-4 text-red-600 hover:text-red-700"
                           >
-                            <ExternalLink className="w-4 h-4" />
-                            Open Document
-                          </a>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                {resources.length === 0 && (
-                  <div className="col-span-full py-20 text-center bg-white rounded-3xl border-2 border-dashed border-slate-100 shadow-sm">
-                    <FileText className="w-16 h-16 text-slate-200 mx-auto mb-4" />
-                    <h4 className="text-lg font-bold text-slate-400">No Resources Yet</h4>
-                    <p className="text-slate-400 text-sm max-w-xs mx-auto mt-1">
-                      Start adding frequently used Google Docs, spreadsheets, or important links for your team.
-                    </p>
-                    {isAdmin && (
-                      <Button 
-                        onClick={() => setIsNewResourceOpen(true)}
-                        variant="link" 
-                        className="mt-4 text-red-600 hover:text-red-700"
-                      >
-                        Add your first resource
-                      </Button>
+                            Add your first resource
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
+                </>
+              ) : (
+                /* Calendar View */
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  {/* Calendar Month Grid */}
+                  <div className="lg:col-span-2 space-y-4">
+                    {/* Month Navigation */}
+                    <div className="flex items-center justify-between bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-bold text-slate-900 capitalize font-sans">
+                          {format(currentCalendarMonth, 'MMMM yyyy')}
+                        </h3>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-8 w-8 p-0 text-slate-500 hover:text-slate-900"
+                          onClick={() => setCurrentCalendarMonth(prev => subMonths(prev, 1))}
+                        >
+                          <ChevronRight className="w-4 h-4 rotate-180" />
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          className="h-8 px-3 border-slate-200 text-xs font-semibold text-slate-600 hover:text-slate-900"
+                          onClick={() => setCurrentCalendarMonth(new Date())}
+                        >
+                          Today
+                        </Button>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-8 w-8 p-0 text-slate-500 hover:text-slate-900"
+                          onClick={() => setCurrentCalendarMonth(prev => addMonths(prev, 1))}
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Calendar Grid Box */}
+                    <Card id="staff-calendar-grid-card" className="border-slate-200 bg-white shadow-sm overflow-hidden p-4">
+                      <div className="grid grid-cols-7 gap-1 text-center mb-2">
+                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => (
+                          <div key={i} className="text-xs font-bold text-slate-400 py-1 uppercase tracking-wider font-mono">
+                            {d}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-7 gap-2">
+                        {/* Empty slots for month start padding */}
+                        {Array.from({ length: getDay(startOfMonth(currentCalendarMonth)) }).map((_, i) => (
+                          <div key={`empty-${i}`} className="min-h-[85px] rounded-lg bg-slate-50/50 border border-transparent" />
+                        ))}
+
+                        {/* Days of month */}
+                        {eachDayOfInterval({ 
+                          start: startOfMonth(currentCalendarMonth), 
+                          end: endOfMonth(currentCalendarMonth) 
+                        }).map((day, idx) => {
+                          const isToday = isSameDay(day, new Date());
+                          const isSelected = selectedCalendarDay && isSameDay(day, selectedCalendarDay);
+                          
+                          // Get events
+                          const dayEvts = staffEvents.filter(e => {
+                            try {
+                              return isSameDay(parseISO(e.date), day);
+                            } catch {
+                              return e.date === format(day, 'yyyy-MM-dd');
+                            }
+                          });
+
+                          const dayBdays = trainers.filter(t => {
+                            if (!t.birthday) return false;
+                            try {
+                              const parts = t.birthday.split('-');
+                              if (parts.length >= 2) {
+                                const bMonth = parseInt(parts[1], 10);
+                                const bDay = parseInt(parts[2] || parts[1], 10);
+                                const actualMonth = parts.length === 2 ? parseInt(parts[0], 10) : bMonth;
+                                const actualDay = parts.length === 2 ? bDay : parseInt(parts[2], 10);
+                                return actualMonth === (day.getMonth() + 1) && actualDay === day.getDate();
+                              }
+                            } catch {}
+                            return false;
+                          });
+
+                          const dayAnns = trainers.filter(t => {
+                            if (!t.workAnniversary) return false;
+                            try {
+                              const parts = t.workAnniversary.split('-');
+                              if (parts.length >= 2) {
+                                const aMonth = parseInt(parts[1], 10);
+                                const aDay = parseInt(parts[2] || parts[1], 10);
+                                const actualMonth = parts.length === 2 ? parseInt(parts[0], 10) : aMonth;
+                                const actualDay = parts.length === 2 ? aDay : parseInt(parts[2], 10);
+                                return actualMonth === (day.getMonth() + 1) && actualDay === day.getDate();
+                              }
+                            } catch {}
+                            return false;
+                          });
+
+                          const totalCount = dayEvts.length + dayBdays.length + dayAnns.length;
+
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => setSelectedCalendarDay(day)}
+                              className={`min-h-[85px] p-1.5 rounded-xl border flex flex-col justify-between text-left transition-all relative ${
+                                isToday 
+                                  ? 'bg-red-50/40 border-red-200 text-red-950 ring-1 ring-red-100/50' 
+                                  : isSelected
+                                    ? 'bg-slate-900 border-slate-900 text-white shadow-md'
+                                    : 'bg-white border-slate-200 hover:border-slate-300 text-slate-800'
+                              }`}
+                            >
+                              <span className={`text-xs font-bold font-mono h-5 w-5 rounded-full flex items-center justify-center ${
+                                isToday && !isSelected
+                                  ? 'bg-red-600 text-white font-black' 
+                                  : isSelected 
+                                    ? 'text-white'
+                                    : 'text-slate-700'
+                              }`}>
+                                {format(day, 'd')}
+                              </span>
+
+                              {/* Event Badges */}
+                              <div className="mt-1 space-y-1 overflow-hidden w-full">
+                                {dayEvts.slice(0, 1).map((e, eIdx) => (
+                                  <div 
+                                    key={eIdx} 
+                                    className={`text-[9px] font-semibold px-1 py-0.5 rounded truncate border ${
+                                      isSelected 
+                                        ? 'bg-white/10 border-white/20 text-white' 
+                                        : e.type === 'outing'
+                                          ? 'bg-indigo-50 border-indigo-100 text-indigo-700'
+                                          : e.type === 'meeting'
+                                            ? 'bg-amber-50 border-amber-100 text-amber-700'
+                                            : 'bg-slate-100 border-slate-200 text-slate-700'
+                                    }`}
+                                  >
+                                    {e.title}
+                                  </div>
+                                ))}
+                                {dayBdays.slice(0, 1).map((t, bIdx) => (
+                                  <div 
+                                    key={bIdx} 
+                                    className={`text-[9px] font-semibold px-1 py-0.5 rounded truncate border flex items-center gap-0.5 ${
+                                      isSelected 
+                                        ? 'bg-pink-950/40 border-pink-800/40 text-pink-100' 
+                                        : 'bg-pink-50 border-pink-100 text-pink-700'
+                                    }`}
+                                  >
+                                    <Cake className="w-2.5 h-2.5 shrink-0" />
+                                    {t.name}
+                                  </div>
+                                ))}
+                                {dayAnns.slice(0, 1).map((t, aIdx) => (
+                                  <div 
+                                    key={aIdx} 
+                                    className={`text-[9px] font-semibold px-1 py-0.5 rounded truncate border flex items-center gap-0.5 ${
+                                      isSelected 
+                                        ? 'bg-emerald-950/40 border-emerald-800/40 text-emerald-100' 
+                                        : 'bg-emerald-50 border-emerald-100 text-emerald-700'
+                                    }`}
+                                  >
+                                    <Briefcase className="w-2.5 h-2.5 shrink-0" />
+                                    {t.name}
+                                  </div>
+                                ))}
+                                {totalCount > 3 && (
+                                  <div className={`text-[8px] font-bold pl-1 ${isSelected ? 'text-white/60' : 'text-slate-400'}`}>
+                                    +{totalCount - 3} more
+                                  </div>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </Card>
+                  </div>
+
+                  {/* Day Details Panel */}
+                  <div className="lg:col-span-1">
+                    {(() => {
+                      const targetDay = selectedCalendarDay || new Date();
+                      
+                      // Get events
+                      const dayEvts = staffEvents.filter(e => {
+                        try {
+                          return isSameDay(parseISO(e.date), targetDay);
+                        } catch {
+                          return e.date === format(targetDay, 'yyyy-MM-dd');
+                        }
+                      });
+
+                      const dayBdays = trainers.filter(t => {
+                        if (!t.birthday) return false;
+                        try {
+                          const parts = t.birthday.split('-');
+                          if (parts.length >= 2) {
+                            const bMonth = parseInt(parts[1], 10);
+                            const bDay = parseInt(parts[2] || parts[1], 10);
+                            const actualMonth = parts.length === 2 ? parseInt(parts[0], 10) : bMonth;
+                            const actualDay = parts.length === 2 ? bDay : parseInt(parts[2], 10);
+                            return actualMonth === (targetDay.getMonth() + 1) && actualDay === targetDay.getDate();
+                          }
+                        } catch {}
+                        return false;
+                      });
+
+                      const dayAnns = trainers.filter(t => {
+                        if (!t.workAnniversary) return false;
+                        try {
+                          const parts = t.workAnniversary.split('-');
+                          if (parts.length >= 2) {
+                            const aMonth = parseInt(parts[1], 10);
+                            const aDay = parseInt(parts[2] || parts[1], 10);
+                            const actualMonth = parts.length === 2 ? parseInt(parts[0], 10) : aMonth;
+                            const actualDay = parts.length === 2 ? aDay : parseInt(parts[2], 10);
+                            return actualMonth === (targetDay.getMonth() + 1) && actualDay === targetDay.getDate();
+                          }
+                        } catch {}
+                        return false;
+                      });
+
+                      const getAnniversaryYears = (trainer: Trainer) => {
+                        if (!trainer.workAnniversary) return null;
+                        try {
+                          const parts = trainer.workAnniversary.split('-');
+                          if (parts.length === 3) {
+                            const startYear = parseInt(parts[0], 10);
+                            const currentYear = targetDay.getFullYear();
+                            const years = currentYear - startYear;
+                            return years > 0 ? `${years} yr` : '1st';
+                          }
+                        } catch {}
+                        return 'Anniversary';
+                      };
+
+                      const hasAny = dayEvts.length > 0 || dayBdays.length > 0 || dayAnns.length > 0;
+
+                      return (
+                        <Card id="staff-calendar-detail-card" className="border-slate-200 bg-white shadow-sm sticky top-24">
+                          <CardHeader className="bg-slate-50 border-b border-slate-200 p-5">
+                            <CardTitle className="text-xs font-bold text-slate-800 font-sans uppercase tracking-wider flex items-center justify-between">
+                              <span>Day Details</span>
+                              <span className="font-mono text-xs text-slate-500 font-semibold">{format(targetDay, 'MMM d, yyyy')}</span>
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="p-5 space-y-6">
+                            {/* Birthdays section */}
+                            {dayBdays.length > 0 && (
+                              <div className="space-y-2">
+                                <h4 className="text-[10px] font-bold text-pink-600 uppercase tracking-widest font-mono flex items-center gap-1">
+                                  <Cake className="w-3.5 h-3.5" /> Staff Birthdays
+                                </h4>
+                                <div className="space-y-2">
+                                  {dayBdays.map((trainer, bIdx) => (
+                                    <div key={bIdx} className="flex items-center gap-3 bg-pink-50/40 border border-pink-100 p-3 rounded-xl">
+                                      <Avatar className="w-8 h-8 border-2 border-white shadow-sm">
+                                        <AvatarImage src={trainer.photoURL || `https://picsum.photos/seed/${trainer.email}/100/100`} />
+                                        <AvatarFallback>{trainer.name[0]}</AvatarFallback>
+                                      </Avatar>
+                                      <div>
+                                        <p className="text-xs font-bold text-slate-900 font-sans">🎉 Happy Birthday, {trainer.name}!</p>
+                                        <p className="text-[10px] text-pink-600 font-medium">Coach at {trainer.location || 'Dorset Street'}</p>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Anniversaries section */}
+                            {dayAnns.length > 0 && (
+                              <div className="space-y-2">
+                                <h4 className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest font-mono flex items-center gap-1">
+                                  <Briefcase className="w-3.5 h-3.5" /> Work Anniversaries
+                                </h4>
+                                <div className="space-y-2">
+                                  {dayAnns.map((trainer, aIdx) => (
+                                    <div key={aIdx} className="flex items-center gap-3 bg-emerald-50/40 border border-emerald-100 p-3 rounded-xl">
+                                      <Avatar className="w-8 h-8 border-2 border-white shadow-sm">
+                                        <AvatarImage src={trainer.photoURL || `https://picsum.photos/seed/${trainer.email}/100/100`} />
+                                        <AvatarFallback>{trainer.name[0]}</AvatarFallback>
+                                      </Avatar>
+                                      <div>
+                                        <p className="text-xs font-bold text-slate-900 font-sans">🙌 Happy {getAnniversaryYears(trainer)} Anniversary!</p>
+                                        <p className="text-[10px] text-emerald-700 font-medium">Thank you for your service at {trainer.location || 'Dorset Street'}!</p>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Custom Events section */}
+                            {dayEvts.length > 0 && (
+                              <div className="space-y-3">
+                                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">
+                                  Staff Events ({dayEvts.length})
+                                </h4>
+                                <div className="space-y-3">
+                                  {dayEvts.map((event, eIdx) => (
+                                    <div key={eIdx} className="bg-slate-50/50 border border-slate-200 p-4 rounded-xl space-y-2 relative group/item">
+                                      <div className="flex justify-between items-start">
+                                        <div>
+                                          <Badge className={`text-[9px] font-bold capitalize ${
+                                            event.type === 'outing' 
+                                              ? 'bg-indigo-50 border-indigo-100 text-indigo-700'
+                                              : event.type === 'meeting'
+                                                ? 'bg-amber-50 border-amber-100 text-amber-700'
+                                                : 'bg-slate-100 border-slate-200 text-slate-700'
+                                          }`}>
+                                            {event.type}
+                                          </Badge>
+                                          <h5 className="text-sm font-bold text-slate-900 mt-1 font-sans">{event.title}</h5>
+                                        </div>
+                                        {(isAdmin || user.id === event.createdBy) && (
+                                          <Button 
+                                            variant="ghost" 
+                                            size="sm" 
+                                            className="h-7 w-7 p-0 text-slate-300 hover:text-red-600 hover:bg-slate-100 rounded-lg shrink-0"
+                                            onClick={() => handleDeleteStaffEvent(event.id)}
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </Button>
+                                        )}
+                                      </div>
+                                      {event.location && (
+                                        <div className="flex items-center gap-1 text-[10px] text-slate-500 font-medium">
+                                          <MapPin className="w-3 h-3 text-slate-400" />
+                                          <span>{event.location}</span>
+                                        </div>
+                                      )}
+                                      {event.description && (
+                                        <p className="text-xs text-slate-600 mt-1 whitespace-pre-wrap font-sans">{event.description}</p>
+                                      )}
+                                      <div className="flex items-center gap-1.5 text-[9px] text-slate-400 pt-1 border-t border-slate-100">
+                                        <span>Created by {event.createdByName}</span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {!hasAny && (
+                              <div className="text-center py-8">
+                                <CalendarDays className="w-10 h-10 text-slate-200 mx-auto mb-2" />
+                                <p className="text-xs font-bold text-slate-400 font-sans">No Events Scheduled</p>
+                                <p className="text-[10px] text-slate-400 mt-0.5">There are no team outings, staff meetings, birthdays, or anniversaries scheduled on this day.</p>
+                                <Button 
+                                  onClick={() => {
+                                    setNewEvent(prev => ({ ...prev, date: format(targetDay, 'yyyy-MM-dd') }));
+                                    setIsNewEventOpen(true);
+                                  }}
+                                  variant="link" 
+                                  className="mt-2 text-xs text-red-600 hover:text-red-700 h-auto p-0 font-semibold"
+                                >
+                                  + Add Event
+                                </Button>
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
+
+          {activeTab === 'marketing' && (
+            <motion.div
+              key="marketing"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              className="space-y-6"
+            >
+              <Card id="marketing-embedded-sheet-card" className="border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col">
+                <div className="bg-slate-50 p-4 border-b border-slate-200 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-lg">
+                      <FileText className="w-4 h-4 text-emerald-600" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900 font-sans">Marketing Spreadsheet</h4>
+                      <a 
+                        href="https://docs.google.com/spreadsheets/d/1jG8rRkxnL6dHjkxxyPSRWZuR5V5cGBi79DluJEV389o/edit?usp=sharing" 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-xs text-red-600 hover:text-red-700 hover:underline flex items-center gap-1 mt-0.5 font-sans"
+                      >
+                        Open spreadsheet in new window <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+                <div className="relative w-full h-[700px] bg-slate-50">
+                  <iframe 
+                    src="https://docs.google.com/spreadsheets/d/1jG8rRkxnL6dHjkxxyPSRWZuR5V5cGBi79DluJEV389o/edit?rm=minimal" 
+                    className="w-full h-full border-none"
+                    title="Marketing Spreadsheet"
+                    referrerPolicy="no-referrer"
+                    allowFullScreen
+                  />
+                </div>
+              </Card>
+            </motion.div>
+          )}
+
+          {activeTab === 'onboarding' && (() => {
+            const currentCourse = courses.find(c => c.id === activeCourseId) || courses[0];
+            const courseChapters = chapters.filter(c => c.courseId === currentCourse?.id).sort((a,b) => a.order - b.order);
+            const activeLesson = lessons.find(l => l.id === activeLessonId);
+            const totalLessons = lessons.filter(l => l.courseId === currentCourse?.id).length;
+            const completedLessons = progressList.filter(p => p.courseId === currentCourse?.id).length;
+            const percent = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
+
+            const getEmbedUrl = (url: string) => {
+              if (!url) return '';
+              if (url.includes('/embed/')) return url;
+              if (url.includes('youtube.com/watch')) {
+                try {
+                  const u = new URL(url);
+                  const v = u.searchParams.get('v');
+                  if (v) return `https://www.youtube.com/embed/${v}`;
+                } catch {}
+              }
+              if (url.includes('youtu.be/')) {
+                const parts = url.split('/');
+                const v = parts[parts.length - 1];
+                if (v) return `https://www.youtube.com/embed/${v.split('?')[0]}`;
+              }
+              if (url.includes('vimeo.com/')) {
+                const parts = url.split('/');
+                const id = parts[parts.length - 1];
+                if (id) return `https://player.vimeo.com/video/${id.split('?')[0]}`;
+              }
+              return url;
+            };
+
+            const isDirectVideo = (url: string) => {
+              if (!url) return false;
+              const cleanUrl = url.toLowerCase().split('?')[0];
+              return cleanUrl.endsWith('.mp4') || cleanUrl.endsWith('.webm') || cleanUrl.endsWith('.ogg') || cleanUrl.endsWith('.mov');
+            };
+
+            const handleNextLesson = () => {
+              if (!currentCourse) return;
+              const orderedLessons: Lesson[] = [];
+              for (const chap of courseChapters) {
+                const chapLessons = lessons.filter(l => l.chapterId === chap.id).sort((a,b) => a.order - b.order);
+                orderedLessons.push(...chapLessons);
+              }
+              const currentIndex = orderedLessons.findIndex(l => l.id === activeLessonId);
+              if (currentIndex !== -1 && currentIndex < orderedLessons.length - 1) {
+                setActiveLessonId(orderedLessons[currentIndex + 1].id);
+              } else {
+                toast.info("You've reached the end of the course! Great job! 🎉");
+              }
+            };
+
+            if (courses.length === 0) {
+              return (
+                <motion.div
+                  key="onboarding-empty"
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -15 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
+                  className="space-y-6"
+                >
+                  <Card className="border-slate-200 bg-white p-12 text-center shadow-sm">
+                    <div className="max-w-md mx-auto space-y-6">
+                      <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto border border-red-100 shadow-sm">
+                        <GraduationCap className="w-8 h-8" />
+                      </div>
+                      <div className="space-y-2">
+                        <h3 className="text-xl font-bold text-slate-900 font-sans">No Onboarding Courses Found</h3>
+                        <p className="text-sm text-slate-500 font-sans leading-relaxed">
+                          There are no onboarding or training courses created yet. Switch to "Course Builder Mode" in the top bar to create custom chapters, add lessons, and publish your syllabus.
+                        </p>
+                      </div>
+                      {isAdmin && (
+                        <div className="flex justify-center gap-3">
+                          <Button onClick={() => setIsNewCourseOpen(true)} className="bg-red-600 hover:bg-red-700 font-semibold text-xs">
+                            Create Custom Course
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+                  {isAdmin && (
+                    <Dialog open={isNewCourseOpen} onOpenChange={setIsNewCourseOpen}>
+                      <DialogContent className="sm:max-w-[450px]">
+                        <DialogHeader>
+                          <DialogTitle>Create Custom Course</DialogTitle>
+                          <DialogDescription>Add a new coaching or training curriculum for your trainers.</DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-3">
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="course-title">Course Title</Label>
+                            <Input 
+                              id="course-title"
+                              value={newCourse.title}
+                              onChange={(e) => setNewCourse({ ...newCourse, title: e.target.value })}
+                              placeholder="e.g. Front Desk & Reception Training"
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="course-desc">Description</Label>
+                            <Textarea 
+                              id="course-desc"
+                              value={newCourse.description}
+                              onChange={(e) => setNewCourse({ ...newCourse, description: e.target.value })}
+                              placeholder="Describe what the trainers will learn in this course..."
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="course-category">Category</Label>
+                            <Input 
+                              id="course-category"
+                              value={newCourse.category}
+                              onChange={(e) => setNewCourse({ ...newCourse, category: e.target.value })}
+                              placeholder="e.g. Onboarding, Operations, Certifications"
+                            />
+                          </div>
+                        </div>
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => setIsNewCourseOpen(false)}>Cancel</Button>
+                          <Button onClick={handleCreateCourse} className="bg-red-600 hover:bg-red-700">Create Course</Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  )}
+                </motion.div>
+              );
+            }
+
+            return (
+              <motion.div
+                key="onboarding-main"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.25, ease: "easeOut" }}
+                className="space-y-6"
+              >
+                {/* Course Progress Header Bar */}
+                <Card className="border-slate-200 bg-white shadow-xs p-5">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="bg-red-50 border-red-100 text-red-600 font-semibold text-[10px] uppercase tracking-wider px-1.5 py-0">
+                          {currentCourse?.category || 'Onboarding'}
+                        </Badge>
+                        <h3 className="text-lg font-bold text-slate-900 font-sans">{currentCourse?.title}</h3>
+                      </div>
+                      <p className="text-xs text-slate-500 font-sans max-w-2xl">{currentCourse?.description}</p>
+                    </div>
+
+                    <div className="w-full md:w-64 space-y-1.5 shrink-0">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-semibold text-slate-600">Progress Tracker</span>
+                        <span className="font-mono font-bold text-slate-900">{completedLessons} / {totalLessons} completed ({percent}%)</span>
+                      </div>
+                      <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                        <div className="bg-red-600 h-full transition-all duration-500" style={{ width: `${percent}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                  {/* Left Sidebar: Course Chapters & Lessons list */}
+                  <div className="lg:col-span-4 space-y-4">
+                    {/* Course Selector Dropdown if multiple courses */}
+                    {courses.length > 1 && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-bold text-slate-500 uppercase tracking-wider font-mono">Select Course</Label>
+                        <Select value={activeCourseId || ''} onValueChange={setActiveCourseId}>
+                          <SelectTrigger className="bg-white border-slate-200 h-10 shadow-xs">
+                            <SelectValue placeholder="Choose a course..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {courses.map(c => (
+                              <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                      <div className="bg-slate-50 border-b border-slate-200 p-4">
+                        <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest font-mono flex items-center gap-1.5">
+                          <BookOpen className="w-3.5 h-3.5 text-red-500" /> Syllabus / Course outline
+                        </h4>
+                      </div>
+
+                      <div className="divide-y divide-slate-100 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                        {courseChapters.map((chapter) => {
+                          const chapterLessons = lessons.filter(l => l.chapterId === chapter.id).sort((a,b) => a.order - b.order);
+                          return (
+                            <div key={chapter.id} className="p-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <h5 className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                                  <span>{chapter.title}</span>
+                                </h5>
+                                {isOnboardingAdminMode && isAdmin && (
+                                  <div className="flex gap-1">
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                      onClick={() => {
+                                        if (confirm("Are you sure you want to delete this chapter and all its lessons?")) {
+                                          handleDeleteChapter(chapter.id);
+                                        }
+                                      }}
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="space-y-1">
+                                {chapterLessons.map((lesson) => {
+                                  const isCompleted = progressList.some(p => p.lessonId === lesson.id);
+                                  const isActive = lesson.id === activeLessonId;
+                                  return (
+                                    <div 
+                                      key={lesson.id}
+                                      className={`group w-full flex items-center justify-between p-2 rounded-lg text-left transition-all text-xs cursor-pointer ${
+                                        isActive 
+                                          ? 'bg-red-50 border border-red-200 text-red-700 font-semibold' 
+                                          : 'hover:bg-slate-50 border border-transparent text-slate-600'
+                                      }`}
+                                      onClick={() => setActiveLessonId(lesson.id)}
+                                    >
+                                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                        <button 
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleToggleLessonProgress(lesson.id, currentCourse.id);
+                                          }}
+                                          className="shrink-0 transition-transform active:scale-95 animate-none"
+                                        >
+                                          {isCompleted ? (
+                                            <CheckCircle2 className="w-4 h-4 text-emerald-600 fill-emerald-50" />
+                                          ) : (
+                                            <div className="w-4 h-4 rounded-full border-2 border-slate-300 hover:border-red-500" />
+                                          )}
+                                        </button>
+                                        <div className="min-w-0 flex-1">
+                                          <p className={`truncate ${isActive ? 'text-red-800' : 'text-slate-800'}`}>{lesson.title}</p>
+                                          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400 font-medium">
+                                            <span className="flex items-center gap-0.5">
+                                              <Clock className="w-2.5 h-2.5" /> {lesson.duration || 5} min
+                                            </span>
+                                            {lesson.videoUrl && (
+                                              <span className="flex items-center gap-0.5 text-blue-500">
+                                                <Video className="w-2.5 h-2.5" /> Video
+                                              </span>
+                                            )}
+                                            {lesson.textBody && (
+                                              <span className="flex items-center gap-0.5 text-emerald-600">
+                                                <FileText className="w-2.5 h-2.5" /> Guide
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {isOnboardingAdminMode && isAdmin && (
+                                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          <Button 
+                                            variant="ghost" 
+                                            size="sm" 
+                                            className="h-6 w-6 p-0 text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setNewLesson({
+                                                courseId: lesson.courseId,
+                                                chapterId: lesson.chapterId,
+                                                title: lesson.title,
+                                                description: lesson.description || '',
+                                                videoUrl: lesson.videoUrl || '',
+                                                textBody: lesson.textBody || '',
+                                                duration: lesson.duration || 5,
+                                                order: lesson.order || 1,
+                                              });
+                                              setEditingLessonId(lesson.id);
+                                              setIsNewLessonOpen(true);
+                                            }}
+                                          >
+                                            <Edit2 className="w-3 h-3" />
+                                          </Button>
+                                          <Button 
+                                            variant="ghost" 
+                                            size="sm" 
+                                            className="h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleDeleteLesson(lesson.id);
+                                            }}
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                          </Button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                                {chapterLessons.length === 0 && (
+                                  <p className="text-[10px] text-slate-400 italic pl-6 py-2">No lessons in this chapter yet.</p>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {courseChapters.length === 0 && (
+                          <div className="p-8 text-center">
+                            <p className="text-xs text-slate-400 italic">No chapters created yet. Open builder mode to create chapters and lessons.</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Panel: Immersive Video Player & Study Guide */}
+                  <div className="lg:col-span-8 space-y-6">
+                    {activeLesson ? (
+                      <Card className="border-slate-200 bg-white shadow-xs overflow-hidden flex flex-col">
+                        {/* Video Screen Area */}
+                        {activeLesson.videoUrl ? (
+                          <div className="aspect-video w-full bg-slate-950 relative border-b border-slate-200">
+                            {isDirectVideo(activeLesson.videoUrl) ? (
+                              <video 
+                                src={activeLesson.videoUrl} 
+                                controls 
+                                className="w-full h-full object-contain" 
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <iframe 
+                                src={getEmbedUrl(activeLesson.videoUrl)} 
+                                className="w-full h-full border-none"
+                                allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media" 
+                                allowFullScreen
+                                referrerPolicy="no-referrer"
+                                title={activeLesson.title}
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <div className="bg-gradient-to-br from-amber-50/50 to-orange-50/50 p-8 border-b border-slate-100 flex flex-col items-center justify-center text-center space-y-3">
+                            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shadow-sm">
+                              <BookOpen className="w-6 h-6" />
+                            </div>
+                            <div className="space-y-1">
+                              <h5 className="text-sm font-bold text-amber-900 font-sans">Reading-Only Training Module</h5>
+                              <p className="text-xs text-amber-700 max-w-md font-sans leading-relaxed">This module does not require a video. Please read the detailed instructions and operational manual below.</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Title & Stats */}
+                        <div className="p-6 border-b border-slate-100 space-y-3">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="space-y-1">
+                              <h4 className="text-xl font-bold text-slate-900 leading-snug font-sans">{activeLesson.title}</h4>
+                              {activeLesson.description && (
+                                <p className="text-xs text-slate-500 font-sans">{activeLesson.description}</p>
+                              )}
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              <Badge variant="outline" className="text-xs font-semibold px-2 py-0.5 bg-slate-50 text-slate-600 flex items-center gap-1">
+                                <Clock className="w-3 h-3" /> {activeLesson.duration || 5} mins
+                              </Badge>
+                              {progressList.some(p => p.lessonId === activeLesson.id) ? (
+                                <Badge className="text-xs font-semibold px-2 py-0.5 bg-emerald-100 text-emerald-800 border-emerald-200">
+                                  Completed 🎉
+                                </Badge>
+                              ) : (
+                                <Badge variant="secondary" className="text-xs font-semibold px-2 py-0.5 bg-slate-100 text-slate-500">
+                                  Incomplete
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Text guide content */}
+                        <div className="p-6 space-y-4">
+                          <h5 className="text-xs font-bold text-slate-400 uppercase tracking-widest font-mono">Accompanying Guide & Checklist</h5>
+                          <div className="bg-slate-50/50 border border-slate-150 rounded-xl p-6 font-sans text-sm text-slate-700 leading-relaxed whitespace-pre-wrap max-h-[400px] overflow-y-auto custom-scrollbar">
+                            {activeLesson.textBody || "No instructions provided for this lesson yet."}
+                          </div>
+                        </div>
+
+                        {/* Completion / Next Action buttons */}
+                        <div className="bg-slate-50 p-4 border-t border-slate-200 flex items-center justify-between gap-4">
+                          <Button
+                            onClick={() => handleToggleLessonProgress(activeLesson.id, currentCourse.id)}
+                            className={`font-semibold text-xs gap-1.5 shadow-xs ${
+                              progressList.some(p => p.lessonId === activeLesson.id)
+                                ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                                : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                            }`}
+                          >
+                            {progressList.some(p => p.lessonId === activeLesson.id) ? (
+                              <>Mark as Incomplete</>
+                            ) : (
+                              <>Mark as Completed 🎉</>
+                            )}
+                          </Button>
+
+                          <Button
+                            onClick={handleNextLesson}
+                            variant="outline"
+                            className="border-slate-200 font-semibold text-xs gap-1.5"
+                          >
+                            Next Lesson <ChevronRight className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </Card>
+                    ) : (
+                      <Card className="border-slate-200 bg-white p-16 text-center shadow-xs flex flex-col items-center justify-center space-y-4 h-96">
+                        <div className="w-16 h-16 bg-slate-50 text-slate-400 rounded-full flex items-center justify-center border border-slate-100 shadow-xs">
+                          <BookOpen className="w-8 h-8" />
+                        </div>
+                        <div className="space-y-1">
+                          <h4 className="text-base font-bold text-slate-800 font-sans">No Lesson Selected</h4>
+                          <p className="text-xs text-slate-400 max-w-sm leading-relaxed font-sans">Select any training module from the course outline on the left to begin learning.</p>
+                        </div>
+                      </Card>
+                    )}
+                  </div>
+                </div>
+
+                {/* --- COURSE BUILDER DIALOGS (ONLY ACCESSIBLE FOR ADMINS) --- */}
+                {isAdmin && (
+                  <>
+                    {/* 1. New/Edit Course Dialog */}
+                    <Dialog open={isNewCourseOpen} onOpenChange={setIsNewCourseOpen}>
+                      <DialogContent className="sm:max-w-[450px]">
+                        <DialogHeader>
+                          <DialogTitle>Create Custom Course</DialogTitle>
+                          <DialogDescription>Add a new coaching or training curriculum for your trainers.</DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-3">
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="course-title">Course Title</Label>
+                            <Input 
+                              id="course-title"
+                              value={newCourse.title}
+                              onChange={(e) => setNewCourse({ ...newCourse, title: e.target.value })}
+                              placeholder="e.g. Front Desk & Reception Training"
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="course-desc">Description</Label>
+                            <Textarea 
+                              id="course-desc"
+                              value={newCourse.description}
+                              onChange={(e) => setNewCourse({ ...newCourse, description: e.target.value })}
+                              placeholder="Describe what the trainers will learn in this course..."
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="course-category">Category</Label>
+                            <Input 
+                              id="course-category"
+                              value={newCourse.category}
+                              onChange={(e) => setNewCourse({ ...newCourse, category: e.target.value })}
+                              placeholder="e.g. Onboarding, Operations, Certifications"
+                            />
+                          </div>
+                        </div>
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => setIsNewCourseOpen(false)}>Cancel</Button>
+                          <Button onClick={handleCreateCourse} className="bg-red-600 hover:bg-red-700">Create Course</Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+
+                    {/* 2. New Chapter Dialog */}
+                    <Dialog open={isNewChapterOpen} onOpenChange={setIsNewChapterOpen}>
+                      <DialogContent className="sm:max-w-[400px]">
+                        <DialogHeader>
+                          <DialogTitle>Add New Chapter</DialogTitle>
+                          <DialogDescription>Group training lessons into sequential chapters.</DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-3">
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="chapter-title">Chapter Title</Label>
+                            <Input 
+                              id="chapter-title"
+                              value={newChapter.title}
+                              onChange={(e) => setNewChapter({ ...newChapter, title: e.target.value })}
+                              placeholder="e.g. Chapter 1: Gym Etiquette & Cleanliness"
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="chapter-order">Display Order Index</Label>
+                            <Input 
+                              id="chapter-order"
+                              type="number"
+                              value={newChapter.order}
+                              onChange={(e) => setNewChapter({ ...newChapter, order: Number(e.target.value) })}
+                              placeholder="1"
+                            />
+                          </div>
+                        </div>
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => setIsNewChapterOpen(false)}>Cancel</Button>
+                          <Button onClick={handleCreateChapter} className="bg-red-600 hover:bg-red-700">Create Chapter</Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+
+                    {/* 3. New/Edit Lesson Dialog */}
+                    <Dialog open={isNewLessonOpen} onOpenChange={(open) => {
+                      if (!open) {
+                        setEditingLessonId(null);
+                        setNewLesson({
+                          courseId: '',
+                          chapterId: '',
+                          title: '',
+                          description: '',
+                          videoUrl: '',
+                          textBody: '',
+                          duration: 5,
+                          order: 1,
+                        });
+                      }
+                      setIsNewLessonOpen(open);
+                    }}>
+                      <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
+                        <DialogHeader>
+                          <DialogTitle>{editingLessonId ? 'Edit Training Lesson' : 'Add Training Lesson'}</DialogTitle>
+                          <DialogDescription>Upload instruction videos, set descriptions, and write accompanying checklists.</DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-3">
+                          {!editingLessonId && (
+                            <div className="grid gap-1.5">
+                              <Label htmlFor="lesson-chapter">Chapter Section</Label>
+                              <Select 
+                                value={newLesson.chapterId} 
+                                onValueChange={(val) => setNewLesson({ ...newLesson, chapterId: val })}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Choose a chapter..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {courseChapters.map(chap => (
+                                    <SelectItem key={chap.id} value={chap.id}>{chap.title}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )}
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="lesson-title">Lesson Title</Label>
+                            <Input 
+                              id="lesson-title"
+                              value={newLesson.title}
+                              onChange={(e) => setNewLesson({ ...newLesson, title: e.target.value })}
+                              placeholder="e.g. 1.1 Floor Inspection Checklist"
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="lesson-desc">Short Caption</Label>
+                            <Input 
+                              id="lesson-desc"
+                              value={newLesson.description}
+                              onChange={(e) => setNewLesson({ ...newLesson, description: e.target.value })}
+                              placeholder="A brief overview of the module content"
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="lesson-video">Video Link (YouTube, Vimeo, MP4, etc.)</Label>
+                            <Input 
+                              id="lesson-video"
+                              value={newLesson.videoUrl}
+                              onChange={(e) => setNewLesson({ ...newLesson, videoUrl: e.target.value })}
+                              placeholder="https://www.youtube.com/watch?v=..."
+                            />
+                            <p className="text-[10px] text-slate-400">Supports direct MP4 links, YouTube videos, and Vimeo embeds automatically.</p>
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="lesson-text">Written Instructions / Checklist Guide</Label>
+                            <Textarea 
+                              id="lesson-text"
+                              value={newLesson.textBody}
+                              onChange={(e) => setNewLesson({ ...newLesson, textBody: e.target.value })}
+                              placeholder="Enter step-by-step checklists, notes, and guidelines for the trainer..."
+                              className="min-h-[150px]"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="grid gap-1.5">
+                              <Label htmlFor="lesson-duration">Duration (Minutes)</Label>
+                              <Input 
+                                id="lesson-duration"
+                                type="number"
+                                value={newLesson.duration}
+                                onChange={(e) => setNewLesson({ ...newLesson, duration: Number(e.target.value) })}
+                                placeholder="5"
+                              />
+                            </div>
+                            <div className="grid gap-1.5">
+                              <Label htmlFor="lesson-order">Display Order Index</Label>
+                              <Input 
+                                id="lesson-order"
+                                type="number"
+                                value={newLesson.order}
+                                onChange={(e) => setNewLesson({ ...newLesson, order: Number(e.target.value) })}
+                                placeholder="1"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => {
+                            setEditingLessonId(null);
+                            setIsNewLessonOpen(false);
+                          }}>Cancel</Button>
+                          <Button 
+                            onClick={editingLessonId ? handleUpdateLesson : handleCreateLesson}
+                            className="bg-red-600 hover:bg-red-700"
+                          >
+                            {editingLessonId ? 'Save Changes' : 'Add Lesson'}
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </>
+                )}
+              </motion.div>
+            );
+          })()}
+
+
         </AnimatePresence>
       </main>
 

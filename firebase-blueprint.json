@@ -132,6 +132,78 @@
         "createdBy": { "type": "string" }
       },
       "required": ["title", "url", "createdAt", "createdBy"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "An onboarding training course",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "thumbnailUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["title", "createdAt", "createdBy"]
+    },
+    "Chapter": {
+      "title": "Chapter",
+      "description": "A chapter grouping multiple lessons in a course",
+      "type": "object",
+      "properties": {
+        "courseId": { "type": "string" },
+        "title": { "type": "string" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["courseId", "title", "order", "createdAt"]
+    },
+    "Lesson": {
+      "title": "Lesson",
+      "description": "An individual instruction or checklist module",
+      "type": "object",
+      "properties": {
+        "courseId": { "type": "string" },
+        "chapterId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "videoUrl": { "type": "string" },
+        "textBody": { "type": "string" },
+        "duration": { "type": "number" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["courseId", "chapterId", "title", "order", "createdAt"]
+    },
+    "UserLessonProgress": {
+      "title": "UserLessonProgress",
+      "description": "Onboarding progress tracking for lessons",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "lessonId": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "courseId", "lessonId", "completed"]
+    },
+    "StaffEvent": {
+      "title": "StaffEvent",
+      "description": "An event on the team staff calendar",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "type": { "type": "string", "enum": ["outing", "meeting", "party", "other"] },
+        "location": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" },
+        "createdByName": { "type": "string" }
+      },
+      "required": ["title", "date", "type", "createdAt", "createdBy", "createdByName"]
     }
   },
   "firestore": {
@@ -166,6 +238,26 @@
     "/resources/{resourceId}": {
       "schema": "Resource",
       "description": "Frequently used links and documents"
+    },
+    "/courses/{courseId}": {
+      "schema": "Course",
+      "description": "Onboarding courses"
+    },
+    "/chapters/{chapterId}": {
+      "schema": "Chapter",
+      "description": "Course chapters"
+    },
+    "/lessons/{lessonId}": {
+      "schema": "Lesson",
+      "description": "Syllabus lessons"
+    },
+    "/course_progress/{progressId}": {
+      "schema": "UserLessonProgress",
+      "description": "User course progress"
+    },
+    "/staff_events/{eventId}": {
+      "schema": "StaffEvent",
+      "description": "Staff social and operations events calendar"
     }
   }
 }

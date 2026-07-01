@@ -16,6 +16,9 @@ export default defineConfig(({mode}) => {
         '@': fileURLToPath(new URL('.', import.meta.url)),
       },
     },
+    optimizeDeps: {
+      force: true,
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.

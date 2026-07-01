@@ -145,6 +145,53 @@ service cloud.firestore {
              (data.category == null || data.category is string);
     }
 
+    function isValidCourse(data) {
+      return data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             (data.get('description', null) == null || data.get('description', null) is string) &&
+             (data.get('category', null) == null || data.get('category', null) is string) &&
+             (data.get('thumbnailUrl', null) == null || data.get('thumbnailUrl', null) is string) &&
+             data.createdAt is string &&
+             data.createdBy is string;
+    }
+
+    function isValidChapter(data) {
+      return data.courseId is string &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.order is number &&
+             data.createdAt is string;
+    }
+
+    function isValidLesson(data) {
+      return data.courseId is string &&
+             data.chapterId is string &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             (data.get('description', null) == null || data.get('description', null) is string) &&
+             (data.get('videoUrl', null) == null || data.get('videoUrl', null) is string) &&
+             (data.get('textBody', null) == null || data.get('textBody', null) is string) &&
+             (data.get('duration', null) == null || data.get('duration', null) is number) &&
+             data.order is number &&
+             data.createdAt is string;
+    }
+
+    function isValidCourseProgress(data) {
+      return data.userId is string &&
+             data.courseId is string &&
+             data.lessonId is string &&
+             data.completed is bool &&
+             (data.get('completedAt', null) == null || data.get('completedAt', null) is string);
+    }
+
+    function isValidStaffEvent(data) {
+      return data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             (data.get('description', null) == null || data.get('description', null) is string) &&
+             data.date is string &&
+             data.type in ['outing', 'meeting', 'party', 'other'] &&
+             (data.get('location', null) == null || data.get('location', null) is string) &&
+             data.createdAt is string &&
+             data.createdBy is string &&
+             data.createdByName is string;
+    }
+
     // ===============================================================
     // Routes
     // ===============================================================
@@ -226,6 +273,42 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow write: if isAdmin() && isValidResource(request.resource.data);
       allow delete: if isAdmin();
+    }
+
+    // Onboarding Courses collection
+    match /courses/{courseId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidCourse(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Onboarding Chapters collection
+    match /chapters/{chapterId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidChapter(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Onboarding Lessons collection
+    match /lessons/{lessonId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidLesson(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Onboarding Course Progress collection
+    match /course_progress/{progressId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (request.resource.data.userId == request.auth.uid || isAdmin()) && isValidCourseProgress(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Staff Events collection
+    match /staff_events/{eventId} {
+      allow read: if isAuthenticated();
+      allow create: if isStaff() && isValidStaffEvent(request.resource.data);
+      allow update: if isStaff() && isValidStaffEvent(request.resource.data);
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.createdBy == request.auth.uid);
     }
     
     // Default deny for everything else

@@ -179,3 +179,56 @@ export interface Resource {
   createdAt: string;
   createdBy: string;
 }
+
+export interface StaffEvent {
+  id: string;
+  title: string;
+  description?: string;
+  date: string; // YYYY-MM-DD
+  type: 'outing' | 'meeting' | 'party' | 'other';
+  location?: string;
+  createdAt: string;
+  createdBy: string;
+  createdByName: string;
+}
+
+export interface Course {
+  id: string;
+  title: string;
+  description: string;
+  category?: string;
+  thumbnailUrl?: string;
+  createdAt: string;
+  createdBy: string;
+}
+
+export interface Chapter {
+  id: string;
+  courseId: string;
+  title: string;
+  order: number;
+  createdAt: string;
+}
+
+export interface Lesson {
+  id: string;
+  courseId: string;
+  chapterId: string;
+  title: string;
+  description?: string;
+  videoUrl?: string;
+  textBody?: string;
+  duration?: number; // In minutes
+  order: number;
+  createdAt: string;
+}
+
+export interface UserLessonProgress {
+  id: string; // userId_lessonId
+  userId: string;
+  courseId: string;
+  lessonId: string;
+  completed: boolean;
+  completedAt?: string;
+}
+
