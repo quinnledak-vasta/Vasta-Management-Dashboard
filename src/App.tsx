@@ -48,7 +48,8 @@ import {
   GraduationCap,
   BookOpen,
   Play,
-  Video
+  Video,
+  ArrowLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
@@ -918,7 +919,7 @@ function AppContent() {
         ...doc.data()
       })) as Course[];
       setCourses(courseList);
-      if (courseList.length > 0 && !activeCourseId) {
+      if (courseList.length === 1 && !activeCourseId) {
         setActiveCourseId(courseList[0].id);
       }
     }, (error) => {
@@ -5531,6 +5532,113 @@ function AppContent() {
               );
             }
 
+            if (!activeCourseId) {
+              return (
+                <motion.div
+                  key="onboarding-catalog"
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -15 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
+                  className="space-y-6"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 bg-white border border-slate-200 rounded-xl shadow-xs">
+                    <div className="space-y-1">
+                      <h3 className="text-xl font-bold text-slate-900 font-sans">Available Onboarding & Training Courses</h3>
+                      <p className="text-xs text-slate-500 font-sans">
+                        Select a course below to begin your training, view chapters, and track your certification progress.
+                      </p>
+                    </div>
+                    {isOnboardingAdminMode && isAdmin && (
+                      <Button onClick={() => setIsNewCourseOpen(true)} className="bg-red-600 hover:bg-red-700 font-semibold text-xs shrink-0">
+                        <Plus className="w-3.5 h-3.5 mr-1" /> Create Custom Course
+                      </Button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {courses.map((course) => {
+                      const courseChapters = chapters.filter(c => c.courseId === course.id).sort((a,b) => a.order - b.order);
+                      const courseLessons = lessons.filter(l => l.courseId === course.id).sort((a,b) => a.order - b.order);
+                      const totalLessons = courseLessons.length;
+                      const completedLessons = progressList.filter(p => p.courseId === course.id).length;
+                      const percent = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
+
+                      return (
+                        <Card 
+                          key={course.id} 
+                          className="border-slate-200 bg-white hover:border-red-200 transition-all duration-200 hover:shadow-md overflow-hidden flex flex-col h-full"
+                        >
+                          <div className="p-6 flex-1 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <Badge variant="outline" className="bg-red-50 border-red-100 text-red-600 font-semibold text-[10px] uppercase tracking-wider px-1.5 py-0">
+                                {course.category || 'Onboarding'}
+                              </Badge>
+                              <span className="text-[10px] font-mono font-medium text-slate-400">
+                                {courseChapters.length} Chapters • {totalLessons} Lessons
+                              </span>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <h4 className="text-base font-bold text-slate-900 font-sans tracking-tight line-clamp-1">
+                                {course.title}
+                              </h4>
+                              <p className="text-xs text-slate-500 font-sans line-clamp-2 leading-relaxed h-8">
+                                {course.description || "No description provided."}
+                              </p>
+                            </div>
+
+                            <div className="space-y-2 pt-2">
+                              <div className="flex justify-between items-center text-xs">
+                                <span className="font-semibold text-slate-600">Progress</span>
+                                <span className="font-mono font-bold text-slate-900">{completedLessons}/{totalLessons} completed ({percent}%)</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                <div className="bg-red-600 h-full transition-all duration-300" style={{ width: `${percent}%` }} />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-50 border-t border-slate-100 p-4 flex gap-2 justify-between items-center mt-auto">
+                            {isOnboardingAdminMode && isAdmin ? (
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="h-8 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 border-red-100"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteCourse(course.id);
+                                }}
+                              >
+                                <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
+                              </Button>
+                            ) : (
+                              <div />
+                            )}
+
+                            <Button 
+                              onClick={() => {
+                                setActiveCourseId(course.id);
+                                if (courseChapters.length > 0) {
+                                  const firstChapterLessons = lessons.filter(l => l.chapterId === courseChapters[0].id).sort((a,b) => a.order - b.order);
+                                  if (firstChapterLessons.length > 0) {
+                                    setActiveLessonId(firstChapterLessons[0].id);
+                                  }
+                                }
+                              }} 
+                              className="bg-red-600 hover:bg-red-700 font-bold text-xs h-8 px-4"
+                            >
+                              {percent === 100 ? 'Review Course' : percent > 0 ? 'Resume Course' : 'Start Course'}
+                            </Button>
+                          </div>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              );
+            }
+
             return (
               <motion.div
                 key="onboarding-main"
@@ -5538,8 +5646,20 @@ function AppContent() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -15 }}
                 transition={{ duration: 0.25, ease: "easeOut" }}
-                className="space-y-6"
+                className="space-y-6 flex flex-col"
               >
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setActiveCourseId(null);
+                    setActiveLessonId(null);
+                  }}
+                  className="text-xs font-semibold text-slate-500 hover:text-slate-800 -ml-2 self-start flex items-center gap-1.5"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" /> Back to Course Catalog
+                </Button>
+
                 {/* Course Progress Header Bar */}
                 <Card className="border-slate-200 bg-white shadow-xs p-5">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
