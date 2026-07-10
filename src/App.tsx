@@ -49,7 +49,9 @@ import {
   BookOpen,
   Play,
   Video,
-  ArrowLeft
+  ArrowLeft,
+  Upload,
+  FileVideo
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
@@ -101,6 +103,7 @@ import { AuthProvider, useAuth } from './lib/AuthContext';
 import { LoginPage } from './components/LoginPage';
 import { TrainerCheckInPanel } from './components/TrainerCheckInPanel';
 import { db, auth } from './lib/firebase';
+import { saveLocalVideo, getLocalVideoBlob } from './lib/videoCache';
 import { 
   collection, 
   onSnapshot, 
@@ -258,12 +261,24 @@ function AppContent() {
   
   const [activeCourseId, setActiveCourseId] = useState<string | null>(null);
   const [activeLessonId, setActiveLessonId] = useState<string | null>(null);
+  const [resolvedLocalUrl, setResolvedLocalUrl] = useState<string | null>(null);
+  const [isResolvingLocalVideo, setIsResolvingLocalVideo] = useState(false);
+  const [videoSourceType, setVideoSourceType] = useState<'link' | 'file'>('link');
+  const [isUploadingLocalFile, setIsUploadingLocalFile] = useState(false);
+  const [uploadDragActive, setUploadDragActive] = useState(false);
   const [isOnboardingAdminMode, setIsOnboardingAdminMode] = useState(false);
   
   const [isNewCourseOpen, setIsNewCourseOpen] = useState(false);
   const [isNewChapterOpen, setIsNewChapterOpen] = useState(false);
   const [isNewLessonOpen, setIsNewLessonOpen] = useState(false);
   const [editingLessonId, setEditingLessonId] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    type: 'course' | 'chapter' | 'lesson' | 'task' | 'resource' | 'staff_event' | 'apparel' | 'checkIn' | 'member' | 'invite';
+    id: string;
+    extraId?: string;
+    title: string;
+    message: string;
+  } | null>(null);
 
   const [newCourse, setNewCourse] = useState({
     title: '',
@@ -998,6 +1013,57 @@ function AppContent() {
     }
   }, [activeCourseId, activeLessonId, chapters, lessons]);
 
+  // Resolve local desktop video if the active lesson has a localfile url
+  useEffect(() => {
+    let active = true;
+    let urlToRevoke: string | null = null;
+
+    const resolveVideo = async () => {
+      const activeLesson = lessons.find(l => l.id === activeLessonId);
+      if (activeLesson?.videoUrl && activeLesson.videoUrl.startsWith('localfile_')) {
+        setIsResolvingLocalVideo(true);
+        setResolvedLocalUrl(null);
+        try {
+          const blob = await getLocalVideoBlob(activeLesson.videoUrl);
+          if (blob && active) {
+            const objectUrl = URL.createObjectURL(blob);
+            urlToRevoke = objectUrl;
+            setResolvedLocalUrl(objectUrl);
+          }
+        } catch (error) {
+          console.error('Error resolving local video:', error);
+        } finally {
+          if (active) {
+            setIsResolvingLocalVideo(false);
+          }
+        }
+      } else {
+        setResolvedLocalUrl(null);
+        setIsResolvingLocalVideo(false);
+      }
+    };
+
+    resolveVideo();
+
+    return () => {
+      active = false;
+      if (urlToRevoke) {
+        URL.revokeObjectURL(urlToRevoke);
+      }
+    };
+  }, [activeLessonId, lessons]);
+
+  // Synchronize videoSourceType state when a lesson modal is opened
+  useEffect(() => {
+    if (isNewLessonOpen) {
+      if (newLesson.videoUrl && newLesson.videoUrl.startsWith('localfile_')) {
+        setVideoSourceType('file');
+      } else {
+        setVideoSourceType('link');
+      }
+    }
+  }, [isNewLessonOpen, newLesson.videoUrl]);
+
   // Fetch Vacations from Firestore
   useEffect(() => {
     if (!user) return;
@@ -1598,33 +1664,123 @@ function AppContent() {
     }
   };
 
-  const handleDeleteCourse = async (courseId: string) => {
-    if (!user || !isAdmin) return;
-    if (!window.confirm("Are you sure you want to delete this course? All chapters, lessons, and user progress records associated with it will be lost.")) return;
+  const triggerDeleteConfirm = (
+    type: 'course' | 'chapter' | 'lesson' | 'task' | 'resource' | 'staff_event' | 'apparel' | 'checkIn' | 'member' | 'invite',
+    id: string,
+    title: string,
+    message: string,
+    extraId?: string
+  ) => {
+    setDeleteConfirm({ type, id, title, message, extraId });
+  };
 
+  const executeDelete = async () => {
+    if (!deleteConfirm) return;
+    const { type, id, extraId } = deleteConfirm;
+    
     try {
-      await deleteDoc(doc(db, 'courses', courseId));
-      
-      // Delete associated chapters
-      const chapsToDelete = chapters.filter(c => c.courseId === courseId);
-      for (const chap of chapsToDelete) {
-        await deleteDoc(doc(db, 'chapters', chap.id));
-      }
+      if (type === 'course') {
+        await deleteDoc(doc(db, 'courses', id));
+        
+        // Delete associated chapters
+        const chapsToDelete = chapters.filter(c => c.courseId === id);
+        for (const chap of chapsToDelete) {
+          await deleteDoc(doc(db, 'chapters', chap.id));
+        }
 
-      // Delete associated lessons
-      const lessonsToDelete = lessons.filter(l => l.courseId === courseId);
-      for (const les of lessonsToDelete) {
-        await deleteDoc(doc(db, 'lessons', les.id));
-      }
+        // Delete associated lessons
+        const lessonsToDelete = lessons.filter(l => l.courseId === id);
+        for (const les of lessonsToDelete) {
+          await deleteDoc(doc(db, 'lessons', les.id));
+        }
 
-      if (activeCourseId === courseId) {
-        setActiveCourseId(null);
-        setActiveLessonId(null);
+        if (activeCourseId === id) {
+          setActiveCourseId(null);
+          setActiveLessonId(null);
+        }
+        toast.success("Course and all associated content deleted successfully");
       }
-      toast.success("Course and all associated content deleted successfully");
+      else if (type === 'chapter') {
+        await deleteDoc(doc(db, 'chapters', id));
+
+        // Delete lessons in this chapter
+        const lessonsToDelete = lessons.filter(l => l.chapterId === id);
+        for (const les of lessonsToDelete) {
+          await deleteDoc(doc(db, 'lessons', les.id));
+        }
+        
+        toast.success("Chapter deleted successfully");
+      }
+      else if (type === 'lesson') {
+        await deleteDoc(doc(db, 'lessons', id));
+        if (activeLessonId === id) {
+          setActiveLessonId(null);
+        }
+        toast.success("Lesson deleted successfully");
+      }
+      else if (type === 'task') {
+        await deleteDoc(doc(db, 'tasks', id));
+        toast.success("Task deleted successfully");
+        if (selectedTaskId === id) {
+          setSelectedTaskId(null);
+        }
+      }
+      else if (type === 'resource') {
+        await deleteDoc(doc(db, 'resources', id));
+        toast.success("Resource deleted successfully");
+      }
+      else if (type === 'staff_event') {
+        await deleteDoc(doc(db, 'staff_events', id));
+        toast.success("Staff event deleted successfully");
+      }
+      else if (type === 'apparel' && extraId) {
+        const trainerId = extraId;
+        const trainer = trainers.find(t => t.id === trainerId);
+        if (trainer) {
+          const currentApparel = trainer.apparel || [];
+          const updatedApparel = currentApparel.filter(a => a.id !== id);
+          await updateDoc(doc(db, 'users', trainerId), {
+            apparel: updatedApparel
+          });
+          toast.success("Apparel item removed");
+        }
+      }
+      else if (type === 'checkIn' && extraId) {
+        const trainerId = extraId;
+        const trainer = trainers.find(t => t.id === trainerId);
+        if (trainer) {
+          const currentCheckIns = trainer.checkIns || [];
+          const updatedCheckIns = currentCheckIns.filter(ci => ci.id !== id);
+          await updateDoc(doc(db, 'users', trainerId), {
+            checkIns: updatedCheckIns
+          });
+          toast.success("Quarterly check-in deleted");
+        }
+      }
+      else if (type === 'member') {
+        await deleteDoc(doc(db, 'users', id));
+        toast.success("Member removed successfully");
+      }
+      else if (type === 'invite') {
+        await deleteDoc(doc(db, 'invites', id));
+        toast.success("Invitation cancelled successfully");
+      }
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `courses/${courseId}`);
+      handleFirestoreError(error, OperationType.DELETE, `${type}s/${id}`);
+    } finally {
+      setDeleteConfirm(null);
     }
+  };
+
+  const handleDeleteCourse = (courseId: string) => {
+    if (!user || !isAdmin) return;
+    const course = courses.find(c => c.id === courseId);
+    triggerDeleteConfirm(
+      'course',
+      courseId,
+      'Delete Course',
+      `Are you sure you want to delete "${course?.title || 'this course'}"? All chapters, lessons, and user progress records associated with it will be lost.`
+    );
   };
 
   const handleCreateChapter = async () => {
@@ -1660,23 +1816,15 @@ function AppContent() {
     }
   };
 
-  const handleDeleteChapter = async (chapterId: string) => {
+  const handleDeleteChapter = (chapterId: string) => {
     if (!user || !isAdmin) return;
-    if (!window.confirm("Are you sure you want to delete this chapter? All lessons inside this chapter will be deleted.")) return;
-
-    try {
-      await deleteDoc(doc(db, 'chapters', chapterId));
-
-      // Delete lessons in this chapter
-      const lessonsToDelete = lessons.filter(l => l.chapterId === chapterId);
-      for (const les of lessonsToDelete) {
-        await deleteDoc(doc(db, 'lessons', les.id));
-      }
-      
-      toast.success("Chapter deleted successfully");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `chapters/${chapterId}`);
-    }
+    const chapter = chapters.find(c => c.id === chapterId);
+    triggerDeleteConfirm(
+      'chapter',
+      chapterId,
+      'Delete Chapter',
+      `Are you sure you want to delete "${chapter?.title || 'this chapter'}"? All lessons inside this chapter will be deleted.`
+    );
   };
 
   const handleCreateLesson = async () => {
@@ -1723,19 +1871,15 @@ function AppContent() {
     }
   };
 
-  const handleDeleteLesson = async (lessonId: string) => {
+  const handleDeleteLesson = (lessonId: string) => {
     if (!user || !isAdmin) return;
-    if (!window.confirm("Are you sure you want to delete this lesson?")) return;
-
-    try {
-      await deleteDoc(doc(db, 'lessons', lessonId));
-      if (activeLessonId === lessonId) {
-        setActiveLessonId(null);
-      }
-      toast.success("Lesson deleted successfully");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `lessons/${lessonId}`);
-    }
+    const lesson = lessons.find(l => l.id === lessonId);
+    triggerDeleteConfirm(
+      'lesson',
+      lessonId,
+      'Delete Lesson',
+      `Are you sure you want to delete "${lesson?.title || 'this lesson'}"?`
+    );
   };
 
   const handleToggleLessonProgress = async (lessonId: string, courseId: string) => {
@@ -4418,7 +4562,9 @@ function AppContent() {
                             disabled={!!editingVacationId}
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder="Select member..." />
+                              <span className={`flex flex-1 text-left truncate text-sm ${!newVacation.userId ? 'text-slate-400' : 'text-slate-900'}`}>
+                                {trainers.find(t => t.id === newVacation.userId)?.name || "Select member..."}
+                              </span>
                             </SelectTrigger>
                             <SelectContent>
                               {trainers.map(s => (
@@ -5694,7 +5840,9 @@ function AppContent() {
                         <Label className="text-xs font-bold text-slate-500 uppercase tracking-wider font-mono">Select Course</Label>
                         <Select value={activeCourseId || ''} onValueChange={setActiveCourseId}>
                           <SelectTrigger className="bg-white border-slate-200 h-10 shadow-xs">
-                            <SelectValue placeholder="Choose a course..." />
+                            <span className={`flex flex-1 text-left truncate text-sm ${!activeCourseId ? 'text-slate-400' : 'text-slate-900'}`}>
+                              {courses.find(c => c.id === activeCourseId)?.title || "Choose a course..."}
+                            </span>
                           </SelectTrigger>
                           <SelectContent>
                             {courses.map(c => (
@@ -5727,10 +5875,9 @@ function AppContent() {
                                       variant="ghost" 
                                       size="sm" 
                                       className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
-                                      onClick={() => {
-                                        if (confirm("Are you sure you want to delete this chapter and all its lessons?")) {
-                                          handleDeleteChapter(chapter.id);
-                                        }
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteChapter(chapter.id);
                                       }}
                                     >
                                       <Trash2 className="w-3 h-3" />
@@ -5850,7 +5997,35 @@ function AppContent() {
                         {/* Video Screen Area */}
                         {activeLesson.videoUrl ? (
                           <div className="aspect-video w-full bg-slate-950 relative border-b border-slate-200">
-                            {isDirectVideo(activeLesson.videoUrl) ? (
+                            {activeLesson.videoUrl.startsWith('localfile_') ? (
+                              isResolvingLocalVideo ? (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 space-y-2">
+                                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500"></div>
+                                  <span className="text-xs font-semibold font-mono">Loading local desktop video...</span>
+                                </div>
+                              ) : resolvedLocalUrl ? (
+                                <video 
+                                  src={resolvedLocalUrl} 
+                                  controls 
+                                  className="w-full h-full object-contain" 
+                                />
+                              ) : (
+                                <div className="absolute inset-0 p-8 flex flex-col items-center justify-center text-center bg-slate-900 border-b border-slate-800 space-y-3">
+                                  <div className="w-12 h-12 rounded-full bg-red-950/50 text-red-400 border border-red-900/30 flex items-center justify-center shadow-xs">
+                                    <FileVideo className="w-6 h-6" />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <h5 className="text-sm font-bold text-slate-100 font-sans">Local Video File Not Found</h5>
+                                    <p className="text-xs text-slate-400 max-w-md font-sans leading-relaxed">
+                                      This video was uploaded as a local file (<code>{activeLesson.videoUrl.split('_').slice(2).join('_')}</code>) from the creator's desktop.
+                                    </p>
+                                    <p className="text-[10px] text-red-400 max-w-sm font-sans leading-relaxed pt-1 mx-auto">
+                                      Because it is stored in the local browser cache of the device that uploaded it, other team members cannot view it. To make this training video visible globally, please edit this lesson and upload a link to a video already online (YouTube, Vimeo, etc.).
+                                    </p>
+                                  </div>
+                                </div>
+                              )
+                            ) : isDirectVideo(activeLesson.videoUrl) ? (
                               <video 
                                 src={activeLesson.videoUrl} 
                                 controls 
@@ -6066,7 +6241,9 @@ function AppContent() {
                                 onValueChange={(val) => setNewLesson({ ...newLesson, chapterId: val })}
                               >
                                 <SelectTrigger>
-                                  <SelectValue placeholder="Choose a chapter..." />
+                                  <span className={`flex flex-1 text-left truncate text-sm ${!newLesson.chapterId ? 'text-slate-400' : 'text-slate-900'}`}>
+                                    {courseChapters.find(chap => chap.id === newLesson.chapterId)?.title || "Choose a chapter..."}
+                                  </span>
                                 </SelectTrigger>
                                 <SelectContent>
                                   {courseChapters.map(chap => (
@@ -6094,15 +6271,163 @@ function AppContent() {
                               placeholder="A brief overview of the module content"
                             />
                           </div>
-                          <div className="grid gap-1.5">
-                            <Label htmlFor="lesson-video">Video Link (YouTube, Vimeo, MP4, etc.)</Label>
-                            <Input 
-                              id="lesson-video"
-                              value={newLesson.videoUrl}
-                              onChange={(e) => setNewLesson({ ...newLesson, videoUrl: e.target.value })}
-                              placeholder="https://www.youtube.com/watch?v=..."
-                            />
-                            <p className="text-[10px] text-slate-400">Supports direct MP4 links, YouTube videos, and Vimeo embeds automatically.</p>
+                          <div className="grid gap-2 border border-slate-100 rounded-xl p-4 bg-slate-50/50">
+                            <div className="flex justify-between items-center">
+                              <Label className="text-slate-700 font-bold text-xs">Lesson Video Source</Label>
+                              <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="xs"
+                                  className={`h-6 text-[10px] px-2.5 rounded-md font-semibold transition-all ${
+                                    videoSourceType === 'link' 
+                                      ? 'bg-white shadow-xs text-slate-800' 
+                                      : 'text-slate-500 hover:text-slate-800'
+                                  }`}
+                                  onClick={() => setVideoSourceType('link')}
+                                >
+                                  Online Video Link
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="xs"
+                                  className={`h-6 text-[10px] px-2.5 rounded-md font-semibold transition-all ${
+                                    videoSourceType === 'file' 
+                                      ? 'bg-white shadow-xs text-slate-800' 
+                                      : 'text-slate-500 hover:text-slate-800'
+                                  }`}
+                                  onClick={() => setVideoSourceType('file')}
+                                >
+                                  Upload Desktop File
+                                </Button>
+                              </div>
+                            </div>
+
+                            {videoSourceType === 'link' ? (
+                              <div className="space-y-1.5 pt-1">
+                                <Label htmlFor="lesson-video" className="text-[10px] text-slate-500 font-semibold">Video Link (YouTube, Vimeo, MP4, etc.)</Label>
+                                <Input 
+                                  id="lesson-video"
+                                  value={newLesson.videoUrl.startsWith('localfile_') ? '' : newLesson.videoUrl}
+                                  onChange={(e) => setNewLesson({ ...newLesson, videoUrl: e.target.value })}
+                                  placeholder="https://www.youtube.com/watch?v=..."
+                                  className="h-9 text-xs"
+                                />
+                                <p className="text-[10px] text-slate-400 leading-normal">Supports direct MP4 links, YouTube videos, and Vimeo embeds automatically.</p>
+                              </div>
+                            ) : (
+                              <div className="pt-1">
+                                {newLesson.videoUrl.startsWith('localfile_') ? (
+                                  <div className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg shadow-2xs">
+                                    <div className="flex items-center gap-2.5 overflow-hidden">
+                                      <div className="p-2 bg-red-50 border border-red-100 rounded-md text-red-600 shrink-0">
+                                        <FileVideo className="w-4 h-4" />
+                                      </div>
+                                      <div className="text-left overflow-hidden">
+                                        <p className="text-xs font-bold text-slate-800 truncate">
+                                          {newLesson.videoUrl.split('_').slice(2).join('_') || "Desktop Video File"}
+                                        </p>
+                                        <p className="text-[10px] text-emerald-600 font-medium font-mono">Stored in browser cache</p>
+                                      </div>
+                                    </div>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setNewLesson({ ...newLesson, videoUrl: '' })}
+                                      className="text-[10px] text-red-500 hover:text-red-700 hover:bg-red-50 h-7 px-2"
+                                    >
+                                      Remove File
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div 
+                                    onDragOver={(e) => {
+                                      e.preventDefault();
+                                      setUploadDragActive(true);
+                                    }}
+                                    onDragLeave={(e) => {
+                                      e.preventDefault();
+                                      setUploadDragActive(false);
+                                    }}
+                                    onDrop={async (e) => {
+                                      e.preventDefault();
+                                      setUploadDragActive(false);
+                                      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                                        const file = e.dataTransfer.files[0];
+                                        if (!file.type.startsWith('video/')) {
+                                          toast.error("Please upload a valid video file.");
+                                          return;
+                                        }
+                                        setIsUploadingLocalFile(true);
+                                        const toastId = toast.loading("Saving video to browser cache...");
+                                        try {
+                                          const localKey = await saveLocalVideo(file);
+                                          setNewLesson({ ...newLesson, videoUrl: localKey });
+                                          toast.success("Desktop video saved successfully to local browser cache! 🎉", { id: toastId });
+                                        } catch (err) {
+                                          console.error(err);
+                                          toast.error("Failed to cache video file.", { id: toastId });
+                                        } finally {
+                                          setIsUploadingLocalFile(false);
+                                        }
+                                      }
+                                    }}
+                                    className={`border-2 border-dashed rounded-lg p-5 flex flex-col items-center justify-center text-center transition-all ${
+                                      uploadDragActive 
+                                        ? 'border-red-500 bg-red-50/20' 
+                                        : 'border-slate-200 bg-white hover:border-slate-300'
+                                    }`}
+                                  >
+                                    <input 
+                                      type="file" 
+                                      id="lesson-file-upload" 
+                                      accept="video/*" 
+                                      className="hidden" 
+                                      onChange={async (e) => {
+                                        if (e.target.files && e.target.files[0]) {
+                                          const file = e.target.files[0];
+                                          setIsUploadingLocalFile(true);
+                                          const toastId = toast.loading("Saving video to browser cache...");
+                                          try {
+                                            const localKey = await saveLocalVideo(file);
+                                            setNewLesson({ ...newLesson, videoUrl: localKey });
+                                            toast.success("Desktop video saved successfully to local browser cache! 🎉", { id: toastId });
+                                          } catch (err) {
+                                            console.error(err);
+                                            toast.error("Failed to cache video file.", { id: toastId });
+                                          } finally {
+                                            setIsUploadingLocalFile(false);
+                                          }
+                                        }
+                                      }}
+                                    />
+                                    <label 
+                                      htmlFor="lesson-file-upload" 
+                                      className="cursor-pointer flex flex-col items-center justify-center space-y-2 w-full h-full"
+                                    >
+                                      {isUploadingLocalFile ? (
+                                        <>
+                                          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-red-500"></div>
+                                          <span className="text-xs font-semibold text-slate-500">Writing file to database cache...</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <div className="p-2 bg-slate-50 rounded-full border border-slate-100 text-slate-400">
+                                            <Upload className="w-5 h-5 text-slate-500" />
+                                          </div>
+                                          <div className="space-y-0.5">
+                                            <p className="text-xs font-bold text-slate-700">Click to upload or drag & drop</p>
+                                            <p className="text-[10px] text-slate-400">Select any video file from your desktop (MP4, WEBM, MOV)</p>
+                                          </div>
+                                        </>
+                                      )}
+                                    </label>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <div className="grid gap-1.5">
                             <Label htmlFor="lesson-text">Written Instructions / Checklist Guide</Label>
@@ -6346,6 +6671,33 @@ function AppContent() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Custom Deletion Confirmation Dialog */}
+      <Dialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="text-red-600 flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-red-600" />
+              {deleteConfirm?.title || "Confirm Deletion"}
+            </DialogTitle>
+            <DialogDescription className="text-slate-600 pt-3 text-sm leading-relaxed">
+              {deleteConfirm?.message || "Are you sure you want to delete this item? This action cannot be undone."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0 mt-4">
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)} className="text-xs">
+              Cancel
+            </Button>
+            <Button 
+              onClick={executeDelete} 
+              className="bg-red-600 hover:bg-red-700 text-xs font-semibold"
+            >
+              Confirm Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       </div>
     </div>
   );
