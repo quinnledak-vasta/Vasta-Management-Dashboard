@@ -221,6 +221,11 @@ export interface Lesson {
   duration?: number; // In minutes
   order: number;
   createdAt: string;
+  hasHomework?: boolean;
+  homeworkTitle?: string;
+  homeworkFileUrl?: string; // Base64 dataUrl or web URL
+  homeworkFileName?: string;
+  homeworkFileType?: 'file' | 'link';
 }
 
 export interface UserLessonProgress {
@@ -230,5 +235,11 @@ export interface UserLessonProgress {
   lessonId: string;
   completed: boolean;
   completedAt?: string;
+  submittedHomeworkUrl?: string; // Student submission (Base64 dataUrl or Web Link)
+  submittedHomeworkFileName?: string; // Original filename if uploaded
+  submittedHomeworkType?: 'file' | 'link';
+  submittedAt?: string;
+  homeworkGrade?: string; // Optional grade/status (e.g. "Pending Review", "Approved", "Revision Needed")
+  homeworkFeedback?: string; // Optional trainer/admin feedback
 }
 

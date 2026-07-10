@@ -268,6 +268,12 @@ function AppContent() {
   const [uploadDragActive, setUploadDragActive] = useState(false);
   const [isOnboardingAdminMode, setIsOnboardingAdminMode] = useState(false);
   
+  // Student Homework submission state
+  const [studentHomeworkFileUrl, setStudentHomeworkFileUrl] = useState<string>('');
+  const [studentHomeworkFileName, setStudentHomeworkFileName] = useState<string>('');
+  const [studentHomeworkType, setStudentHomeworkType] = useState<'file' | 'link'>('link');
+  const [isSubmittingHomework, setIsSubmittingHomework] = useState<boolean>(false);
+  
   const [isNewCourseOpen, setIsNewCourseOpen] = useState(false);
   const [isNewChapterOpen, setIsNewChapterOpen] = useState(false);
   const [isNewLessonOpen, setIsNewLessonOpen] = useState(false);
@@ -291,7 +297,21 @@ function AppContent() {
     title: '',
     order: 1,
   });
-  const [newLesson, setNewLesson] = useState({
+  const [newLesson, setNewLesson] = useState<{
+    courseId: string;
+    chapterId: string;
+    title: string;
+    description: string;
+    videoUrl: string;
+    textBody: string;
+    duration: number;
+    order: number;
+    hasHomework?: boolean;
+    homeworkTitle?: string;
+    homeworkFileUrl?: string;
+    homeworkFileName?: string;
+    homeworkFileType?: 'file' | 'link';
+  }>({
     courseId: '',
     chapterId: '',
     title: '',
@@ -300,6 +320,11 @@ function AppContent() {
     textBody: '',
     duration: 5,
     order: 1,
+    hasHomework: false,
+    homeworkTitle: '',
+    homeworkFileUrl: '',
+    homeworkFileName: '',
+    homeworkFileType: 'link',
   });
   
   const [activeTab, setActiveTab] = useState(() => {
@@ -1014,17 +1039,18 @@ function AppContent() {
   }, [activeCourseId, activeLessonId, chapters, lessons]);
 
   // Resolve local desktop video if the active lesson has a localfile url
+  const activeLessonVideoUrl = lessons.find(l => l.id === activeLessonId)?.videoUrl;
+
   useEffect(() => {
     let active = true;
     let urlToRevoke: string | null = null;
 
     const resolveVideo = async () => {
-      const activeLesson = lessons.find(l => l.id === activeLessonId);
-      if (activeLesson?.videoUrl && activeLesson.videoUrl.startsWith('localfile_')) {
+      if (activeLessonVideoUrl && activeLessonVideoUrl.startsWith('localfile_')) {
         setIsResolvingLocalVideo(true);
         setResolvedLocalUrl(null);
         try {
-          const blob = await getLocalVideoBlob(activeLesson.videoUrl);
+          const blob = await getLocalVideoBlob(activeLessonVideoUrl);
           if (blob && active) {
             const objectUrl = URL.createObjectURL(blob);
             urlToRevoke = objectUrl;
@@ -1051,7 +1077,14 @@ function AppContent() {
         URL.revokeObjectURL(urlToRevoke);
       }
     };
-  }, [activeLessonId, lessons]);
+  }, [activeLessonId, activeLessonVideoUrl]);
+
+  // Reset student homework submission input states when active lesson changes
+  useEffect(() => {
+    setStudentHomeworkFileUrl('');
+    setStudentHomeworkFileName('');
+    setStudentHomeworkType('link');
+  }, [activeLessonId]);
 
   // Synchronize videoSourceType state when a lesson modal is opened
   useEffect(() => {
@@ -1851,6 +1884,11 @@ function AppContent() {
         duration: Number(newLesson.duration) || 5,
         order: Number(newLesson.order) || 1,
         createdAt: new Date().toISOString(),
+        hasHomework: !!newLesson.hasHomework,
+        homeworkTitle: newLesson.homeworkTitle || '',
+        homeworkFileUrl: newLesson.homeworkFileUrl || '',
+        homeworkFileName: newLesson.homeworkFileName || '',
+        homeworkFileType: newLesson.homeworkFileType || 'link',
       };
 
       await addDoc(collection(db, 'lessons'), lessonData);
@@ -1863,6 +1901,11 @@ function AppContent() {
         textBody: '',
         duration: 5,
         order: (lessons.filter(l => l.chapterId === chapterId).length + 2),
+        hasHomework: false,
+        homeworkTitle: '',
+        homeworkFileUrl: '',
+        homeworkFileName: '',
+        homeworkFileType: 'link',
       });
       setIsNewLessonOpen(false);
       toast.success("Lesson created successfully");
@@ -1911,6 +1954,74 @@ function AppContent() {
     }
   };
 
+  const handleSubmitHomework = async (lessonId: string, courseId: string) => {
+    if (!user) return;
+    if (!studentHomeworkFileUrl) {
+      toast.error(studentHomeworkType === 'file' ? "Please upload a file first" : "Please provide a Google Doc/Sheet link");
+      return;
+    }
+
+    setIsSubmittingHomework(true);
+    const toastId = toast.loading("Submitting homework...");
+
+    try {
+      const progressId = `${user.id}_${lessonId}`;
+      const existing = progressList.find(p => p.lessonId === lessonId);
+      
+      const progressData: UserLessonProgress = {
+        id: progressId,
+        userId: user.id,
+        courseId,
+        lessonId,
+        completed: existing ? existing.completed : false,
+        completedAt: existing ? (existing.completedAt || null) : null,
+        submittedHomeworkUrl: studentHomeworkFileUrl,
+        submittedHomeworkFileName: studentHomeworkType === 'file' ? studentHomeworkFileName : 'Google Link',
+        submittedHomeworkType: studentHomeworkType,
+        submittedAt: new Date().toISOString(),
+        homeworkGrade: 'Pending Review',
+        homeworkFeedback: '',
+      };
+
+      await setDoc(doc(db, 'course_progress', progressId), progressData);
+      toast.success("Homework submitted successfully! 🎉", { id: toastId });
+      setStudentHomeworkFileUrl('');
+      setStudentHomeworkFileName('');
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to submit homework.", { id: toastId });
+    } finally {
+      setIsSubmittingHomework(false);
+    }
+  };
+
+  const handleDeleteHomeworkSubmission = async (lessonId: string) => {
+    if (!user) return;
+    const existing = progressList.find(p => p.lessonId === lessonId);
+    if (!existing) return;
+
+    try {
+      if (existing.completed) {
+        // If completed, keep completion but clear homework fields in the record
+        await setDoc(doc(db, 'course_progress', existing.id), {
+          id: existing.id,
+          userId: existing.userId,
+          courseId: existing.courseId,
+          lessonId: existing.lessonId,
+          completed: true,
+          completedAt: existing.completedAt || new Date().toISOString(),
+        });
+      } else {
+        // If not completed, we can safely delete the progress doc entirely
+        await deleteDoc(doc(db, 'course_progress', existing.id));
+      }
+      toast.success("Submission removed successfully");
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to remove submission");
+    }
+  };
+
   const handleUpdateLesson = async () => {
     if (!user || !isAdmin || !editingLessonId) return;
     if (!newLesson.title) {
@@ -1926,6 +2037,11 @@ function AppContent() {
         textBody: newLesson.textBody || '',
         duration: Number(newLesson.duration) || 5,
         order: Number(newLesson.order) || 1,
+        hasHomework: !!newLesson.hasHomework,
+        homeworkTitle: newLesson.homeworkTitle || '',
+        homeworkFileUrl: newLesson.homeworkFileUrl || '',
+        homeworkFileName: newLesson.homeworkFileName || '',
+        homeworkFileType: newLesson.homeworkFileType || 'link',
       });
 
       setNewLesson({
@@ -1937,6 +2053,11 @@ function AppContent() {
         textBody: '',
         duration: 5,
         order: 1,
+        hasHomework: false,
+        homeworkTitle: '',
+        homeworkFileUrl: '',
+        homeworkFileName: '',
+        homeworkFileType: 'link',
       });
       setEditingLessonId(null);
       setIsNewLessonOpen(false);
@@ -5951,6 +6072,11 @@ function AppContent() {
                                                 textBody: lesson.textBody || '',
                                                 duration: lesson.duration || 5,
                                                 order: lesson.order || 1,
+                                                hasHomework: !!lesson.hasHomework,
+                                                homeworkTitle: lesson.homeworkTitle || '',
+                                                homeworkFileUrl: lesson.homeworkFileUrl || '',
+                                                homeworkFileName: lesson.homeworkFileName || '',
+                                                homeworkFileType: lesson.homeworkFileType || 'link',
                                               });
                                               setEditingLessonId(lesson.id);
                                               setIsNewLessonOpen(true);
@@ -6089,6 +6215,249 @@ function AppContent() {
                           </div>
                         </div>
 
+                        {/* Student Homework Card */}
+                        {activeLesson.hasHomework && (() => {
+                          const userProgress = progressList.find(p => p.lessonId === activeLesson.id);
+                          const hasSubmitted = !!userProgress?.submittedHomeworkUrl;
+                          
+                          return (
+                            <div className="p-6 border-t border-slate-100 bg-slate-50/30 space-y-4">
+                              <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+                                <GraduationCap className="w-5 h-5 text-red-600" />
+                                <h5 className="text-sm font-bold text-slate-800 font-sans">Homework Assignment Required</h5>
+                              </div>
+                              
+                              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                  <div>
+                                    <h6 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Assigned Task</h6>
+                                    <p className="text-sm font-semibold text-slate-800 mt-0.5">{activeLesson.homeworkTitle || "Lesson Homework Assignment"}</p>
+                                  </div>
+                                  
+                                  {activeLesson.homeworkFileUrl && (
+                                    <div className="shrink-0">
+                                      {activeLesson.homeworkFileType === 'file' ? (
+                                        <a 
+                                          href={activeLesson.homeworkFileUrl} 
+                                          download={activeLesson.homeworkFileName || "homework_assignment"}
+                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-700 hover:bg-red-100 border border-red-100 rounded-lg text-xs font-bold transition-all"
+                                        >
+                                          <FileText className="w-3.5 h-3.5" /> Download Template
+                                        </a>
+                                      ) : (
+                                        <a 
+                                          href={activeLesson.homeworkFileUrl} 
+                                          target="_blank" 
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-700 hover:bg-red-100 border border-red-100 rounded-lg text-xs font-bold transition-all"
+                                        >
+                                          <ExternalLink className="w-3.5 h-3.5" /> Open Google Doc/Sheet
+                                        </a>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="border-t border-slate-100 pt-4 space-y-4">
+                                  {hasSubmitted ? (
+                                    <div className="space-y-4">
+                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 bg-emerald-50/50 border border-emerald-100 rounded-xl gap-3">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                          <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg shrink-0">
+                                            <ClipboardCheck className="w-4 h-4" />
+                                          </div>
+                                          <div className="text-left min-w-0">
+                                            <p className="text-xs font-bold text-emerald-900">Your Homework Submitted</p>
+                                            <p className="text-[10px] text-emerald-700 truncate mt-0.5">
+                                              {userProgress.submittedHomeworkFileName || "Google Doc Link"}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          {userProgress.submittedHomeworkType === 'file' ? (
+                                            <a 
+                                              href={userProgress.submittedHomeworkUrl} 
+                                              download={userProgress.submittedHomeworkFileName || "my_submission"}
+                                              className="px-2.5 py-1 text-[10px] font-semibold text-slate-700 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 bg-white rounded-md transition-all flex items-center gap-1"
+                                            >
+                                              Download Submission
+                                            </a>
+                                          ) : (
+                                            <a 
+                                              href={userProgress.submittedHomeworkUrl} 
+                                              target="_blank" 
+                                              rel="noopener noreferrer"
+                                              className="px-2.5 py-1 text-[10px] font-semibold text-slate-700 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 bg-white rounded-md transition-all flex items-center gap-1"
+                                            >
+                                              Open Link <ExternalLink className="w-2.5 h-2.5" />
+                                            </a>
+                                          )}
+                                          <Button 
+                                            variant="ghost" 
+                                            size="sm" 
+                                            onClick={() => handleDeleteHomeworkSubmission(activeLesson.id)}
+                                            className="text-[10px] text-red-500 hover:text-red-700 hover:bg-red-50 h-7"
+                                          >
+                                            Remove
+                                          </Button>
+                                        </div>
+                                      </div>
+
+                                      {/* Grading / Review status */}
+                                      <div className="p-3.5 bg-slate-50 border border-slate-150 rounded-xl space-y-2">
+                                        <div className="flex items-center justify-between">
+                                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Submission Review Status</span>
+                                          <span 
+                                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                              userProgress.homeworkGrade === 'Approved' 
+                                                ? 'bg-emerald-100 text-emerald-800' 
+                                                : userProgress.homeworkGrade === 'Revision Needed' 
+                                                  ? 'bg-amber-100 text-amber-800' 
+                                                  : 'bg-blue-100 text-blue-800'
+                                            }`}
+                                          >
+                                            {userProgress.homeworkGrade || 'Pending Review'}
+                                          </span>
+                                        </div>
+                                        {userProgress.homeworkFeedback && (
+                                          <div className="pt-2 border-t border-slate-200/50">
+                                            <p className="text-[10px] font-bold text-slate-500 font-sans">Trainer Feedback:</p>
+                                            <p className="text-xs text-slate-700 font-sans mt-0.5 leading-normal italic">"{userProgress.homeworkFeedback}"</p>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-4">
+                                      <div className="flex justify-between items-center">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Your Submission Source</span>
+                                        <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200">
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="xs"
+                                            className={`h-5 text-[9px] px-2 rounded-md font-semibold transition-all ${
+                                              studentHomeworkType !== 'file' 
+                                                ? 'bg-white shadow-xs text-slate-800' 
+                                                : 'text-slate-500 hover:text-slate-800'
+                                            }`}
+                                            onClick={() => {
+                                              setStudentHomeworkType('link');
+                                              setStudentHomeworkFileUrl('');
+                                              setStudentHomeworkFileName('');
+                                            }}
+                                          >
+                                            Paste Web Link
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="xs"
+                                            className={`h-5 text-[9px] px-2 rounded-md font-semibold transition-all ${
+                                              studentHomeworkType === 'file' 
+                                                ? 'bg-white shadow-xs text-slate-800' 
+                                                : 'text-slate-500 hover:text-slate-800'
+                                            }`}
+                                            onClick={() => {
+                                              setStudentHomeworkType('file');
+                                              setStudentHomeworkFileUrl('');
+                                              setStudentHomeworkFileName('');
+                                            }}
+                                          >
+                                            Upload File
+                                          </Button>
+                                        </div>
+                                      </div>
+
+                                      {studentHomeworkType === 'file' ? (
+                                        <div className="space-y-2">
+                                          {studentHomeworkFileUrl ? (
+                                            <div className="flex items-center justify-between p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
+                                              <div className="flex items-center gap-2 overflow-hidden">
+                                                <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+                                                <div className="text-left overflow-hidden">
+                                                  <p className="text-xs font-semibold text-slate-800 truncate">
+                                                    {studentHomeworkFileName}
+                                                  </p>
+                                                  <p className="text-[10px] text-emerald-600 font-medium font-mono">Ready to submit (under 1MB)</p>
+                                                </div>
+                                              </div>
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="xs"
+                                                onClick={() => {
+                                                  setStudentHomeworkFileUrl('');
+                                                  setStudentHomeworkFileName('');
+                                                }}
+                                                className="text-[10px] text-red-500 hover:text-red-700 h-7"
+                                              >
+                                                Remove
+                                              </Button>
+                                            </div>
+                                          ) : (
+                                            <div className="relative border border-dashed border-slate-200 rounded-lg p-4 bg-slate-50/50 flex flex-col items-center justify-center text-center">
+                                              <input 
+                                                type="file" 
+                                                id="student-homework-upload"
+                                                accept=".doc,.docx,.xls,.xlsx,.pdf,.txt,.csv" 
+                                                className="hidden"
+                                                onChange={(e) => {
+                                                  if (e.target.files && e.target.files[0]) {
+                                                    const file = e.target.files[0];
+                                                    if (file.size > 1048576) {
+                                                      toast.error("File size must be under 1MB. For larger documents, share a Google link instead!");
+                                                      return;
+                                                    }
+                                                    const reader = new FileReader();
+                                                    reader.onload = (loadEvt) => {
+                                                      const base64Url = loadEvt.target?.result as string;
+                                                      setStudentHomeworkFileUrl(base64Url);
+                                                      setStudentHomeworkFileName(file.name);
+                                                    };
+                                                    reader.readAsDataURL(file);
+                                                  }
+                                                }}
+                                              />
+                                              <label htmlFor="student-homework-upload" className="cursor-pointer flex flex-col items-center gap-1 w-full">
+                                                <Upload className="w-4 h-4 text-slate-400" />
+                                                <span className="text-[10px] font-bold text-slate-600">Select Word, Excel, PDF, or text file</span>
+                                                <span className="text-[9px] text-slate-400">Drag & drop or click (under 1MB)</span>
+                                              </label>
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <div className="space-y-1.5">
+                                          <Input 
+                                            id="student-homework-link-input"
+                                            value={studentHomeworkFileUrl}
+                                            onChange={(e) => {
+                                              setStudentHomeworkFileUrl(e.target.value);
+                                              setStudentHomeworkFileName('Google Link');
+                                            }}
+                                            placeholder="https://docs.google.com/document/d/... or share link"
+                                            className="h-9 text-xs"
+                                          />
+                                          <p className="text-[9px] text-slate-400">Paste your shared Google Doc, Google Sheet, or other file link above.</p>
+                                        </div>
+                                      )}
+
+                                      <Button
+                                        onClick={() => handleSubmitHomework(activeLesson.id, currentCourse.id)}
+                                        disabled={isSubmittingHomework}
+                                        className="w-full h-9 bg-red-600 hover:bg-red-700 text-white font-bold text-xs gap-1 shadow-xs"
+                                      >
+                                        <Send className="w-3.5 h-3.5" /> Submit Completed Homework
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {/* Completion / Next Action buttons */}
                         <div className="bg-slate-50 p-4 border-t border-slate-200 flex items-center justify-between gap-4">
                           <Button
@@ -6223,6 +6592,11 @@ function AppContent() {
                           textBody: '',
                           duration: 5,
                           order: 1,
+                          hasHomework: false,
+                          homeworkTitle: '',
+                          homeworkFileUrl: '',
+                          homeworkFileName: '',
+                          homeworkFileType: 'link',
                         });
                       }
                       setIsNewLessonOpen(open);
@@ -6429,6 +6803,150 @@ function AppContent() {
                               </div>
                             )}
                           </div>
+
+                          {/* Homework Settings */}
+                          <div className="grid gap-3 border border-slate-100 rounded-xl p-4 bg-slate-50/50">
+                            <div className="flex justify-between items-center">
+                              <div className="space-y-0.5">
+                                <Label className="text-slate-700 font-bold text-xs">Assign Homework Document</Label>
+                                <p className="text-[10px] text-slate-500 leading-normal">Require trainees to download and/or submit a homework document for this lesson.</p>
+                              </div>
+                              <Checkbox 
+                                id="has-homework-checkbox" 
+                                checked={newLesson.hasHomework || false}
+                                onCheckedChange={(checked) => {
+                                  setNewLesson({ ...newLesson, hasHomework: !!checked });
+                                }}
+                              />
+                            </div>
+
+                            {newLesson.hasHomework && (
+                              <div className="space-y-3 pt-2 border-t border-slate-250">
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="homework-title" className="text-[10px] text-slate-500 font-semibold">Homework Title</Label>
+                                  <Input 
+                                    id="homework-title"
+                                    value={newLesson.homeworkTitle || ''}
+                                    onChange={(e) => setNewLesson({ ...newLesson, homeworkTitle: e.target.value })}
+                                    placeholder="e.g. Weekly Log Practice Sheet"
+                                    className="h-9 text-xs"
+                                  />
+                                </div>
+
+                                <div className="flex justify-between items-center pt-1">
+                                  <Label className="text-[10px] text-slate-500 font-semibold">Reference Document Source</Label>
+                                  <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200">
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="xs"
+                                      className={`h-5 text-[9px] px-2 rounded-md font-semibold transition-all ${
+                                        newLesson.homeworkFileType !== 'file' 
+                                          ? 'bg-white shadow-xs text-slate-800' 
+                                          : 'text-slate-500 hover:text-slate-800'
+                                      }`}
+                                      onClick={() => setNewLesson({ ...newLesson, homeworkFileType: 'link' })}
+                                    >
+                                      Web Link
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="xs"
+                                      className={`h-5 text-[9px] px-2 rounded-md font-semibold transition-all ${
+                                        newLesson.homeworkFileType === 'file' 
+                                          ? 'bg-white shadow-xs text-slate-800' 
+                                          : 'text-slate-500 hover:text-slate-800'
+                                      }`}
+                                      onClick={() => setNewLesson({ ...newLesson, homeworkFileType: 'file' })}
+                                    >
+                                      Upload Document File
+                                    </Button>
+                                  </div>
+                                </div>
+
+                                {newLesson.homeworkFileType === 'file' ? (
+                                  <div className="space-y-2">
+                                    {newLesson.homeworkFileUrl ? (
+                                      <div className="flex items-center justify-between p-2.5 bg-white border border-slate-200 rounded-lg shadow-2xs">
+                                        <div className="flex items-center gap-2 overflow-hidden">
+                                          <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+                                          <div className="text-left overflow-hidden">
+                                            <p className="text-xs font-semibold text-slate-800 truncate">
+                                              {newLesson.homeworkFileName || "Homework Document File"}
+                                            </p>
+                                            <p className="text-[10px] text-emerald-600 font-medium">Loaded (under 1MB Firestore limit)</p>
+                                          </div>
+                                        </div>
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="xs"
+                                          onClick={() => setNewLesson({ ...newLesson, homeworkFileUrl: '', homeworkFileName: '' })}
+                                          className="text-[10px] text-red-500 hover:text-red-750 h-7"
+                                        >
+                                          Remove
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <div className="relative border border-dashed border-slate-200 rounded-lg p-3 bg-white flex flex-col items-center justify-center text-center">
+                                        <input 
+                                          type="file" 
+                                          id="homework-file-upload"
+                                          accept=".doc,.docx,.xls,.xlsx,.pdf,.txt,.csv" 
+                                          className="hidden"
+                                          onChange={(e) => {
+                                            if (e.target.files && e.target.files[0]) {
+                                              const file = e.target.files[0];
+                                              if (file.size > 1048576) {
+                                                toast.error("File is too large! Please upload a file under 1MB, or share a Google Link.");
+                                                return;
+                                              }
+                                              const reader = new FileReader();
+                                              reader.onload = (uploadEvt) => {
+                                                const base64Url = uploadEvt.target?.result as string;
+                                                setNewLesson({
+                                                  ...newLesson,
+                                                  homeworkFileUrl: base64Url,
+                                                  homeworkFileName: file.name,
+                                                  homeworkFileType: 'file'
+                                                });
+                                                toast.success("Homework template loaded! Save the lesson to complete.");
+                                              };
+                                              reader.readAsDataURL(file);
+                                            }
+                                          }}
+                                        />
+                                        <label htmlFor="homework-file-upload" className="cursor-pointer flex flex-col items-center gap-1 w-full h-full">
+                                          <Upload className="w-4 h-4 text-slate-400" />
+                                          <span className="text-[10px] font-bold text-slate-600">Upload doc/sheet template (Max 1MB)</span>
+                                          <span className="text-[9px] text-slate-400">PDF, Word, Excel, CSV, TXT</span>
+                                        </label>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="space-y-1.5">
+                                    <Label htmlFor="homework-link" className="text-[10px] text-slate-500 font-semibold">Google Doc/Sheet or Cloud Link</Label>
+                                    <Input 
+                                      id="homework-link"
+                                      value={newLesson.homeworkFileType === 'file' ? '' : (newLesson.homeworkFileUrl || '')}
+                                      onChange={(e) => setNewLesson({ 
+                                        ...newLesson, 
+                                        homeworkFileUrl: e.target.value,
+                                        homeworkFileType: 'link',
+                                        homeworkFileName: e.target.value ? 'Google Doc/Sheet Link' : ''
+                                      })}
+                                      placeholder="https://docs.google.com/document/d/... or shareable link"
+                                      className="h-9 text-xs"
+                                    />
+                                    <p className="text-[9px] text-slate-400">Enter a Google Docs/Sheets or cloud shareable link.</p>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
                           <div className="grid gap-1.5">
                             <Label htmlFor="lesson-text">Written Instructions / Checklist Guide</Label>
                             <Textarea 
