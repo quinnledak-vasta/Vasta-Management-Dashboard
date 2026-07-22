@@ -218,6 +218,7 @@ export default function App() {
 function AppContent() {
   const { user, loading, logout, addInvite } = useAuth();
   const isAdmin = user?.role === 'admin' || user?.role === 'owner';
+  const canManageEducation = !!user; // All staff have permission to create and manage education content
   const canManageCheckIns = (currentUser: any, targetTrainerId: string) => {
     if (!currentUser) return false;
     const nameLower = currentUser.name?.toLowerCase().trim();
@@ -1666,7 +1667,7 @@ function AppContent() {
   };
 
   const handleCreateCourse = async () => {
-    if (!user || !isAdmin) return;
+    if (!user || !canManageEducation) return;
     if (!newCourse.title || !newCourse.description) {
       toast.error("Please provide a title and description for the course");
       return;
@@ -1806,7 +1807,7 @@ function AppContent() {
   };
 
   const handleDeleteCourse = (courseId: string) => {
-    if (!user || !isAdmin) return;
+    if (!user || !canManageEducation) return;
     const course = courses.find(c => c.id === courseId);
     triggerDeleteConfirm(
       'course',
@@ -1817,7 +1818,7 @@ function AppContent() {
   };
 
   const handleCreateChapter = async () => {
-    if (!user || !isAdmin) return;
+    if (!user || !canManageEducation) return;
     const courseId = activeCourseId || newChapter.courseId;
     if (!courseId) {
       toast.error("Please select a course first");
@@ -1850,7 +1851,7 @@ function AppContent() {
   };
 
   const handleDeleteChapter = (chapterId: string) => {
-    if (!user || !isAdmin) return;
+    if (!user || !canManageEducation) return;
     const chapter = chapters.find(c => c.id === chapterId);
     triggerDeleteConfirm(
       'chapter',
@@ -1861,7 +1862,7 @@ function AppContent() {
   };
 
   const handleCreateLesson = async () => {
-    if (!user || !isAdmin) return;
+    if (!user || !canManageEducation) return;
     const courseId = activeCourseId;
     const chapterId = newLesson.chapterId;
     if (!courseId || !chapterId) {
@@ -1915,7 +1916,7 @@ function AppContent() {
   };
 
   const handleDeleteLesson = (lessonId: string) => {
-    if (!user || !isAdmin) return;
+    if (!user || !canManageEducation) return;
     const lesson = lessons.find(l => l.id === lessonId);
     triggerDeleteConfirm(
       'lesson',
@@ -2023,7 +2024,7 @@ function AppContent() {
   };
 
   const handleUpdateLesson = async () => {
-    if (!user || !isAdmin || !editingLessonId) return;
+    if (!user || !canManageEducation || !editingLessonId) return;
     if (!newLesson.title) {
       toast.error("Please provide a lesson title");
       return;
@@ -2704,7 +2705,7 @@ function AppContent() {
           <div className="flex gap-3">
             {activeTab === 'onboarding' && (
               <div className="flex items-center gap-2">
-                {isAdmin && (
+                {canManageEducation && (
                   <Button
                     onClick={() => setIsOnboardingAdminMode(!isOnboardingAdminMode)}
                     variant="outline"
@@ -2713,7 +2714,7 @@ function AppContent() {
                     {isOnboardingAdminMode ? '👁️ Learner Mode' : '⚙️ Course Builder Mode'}
                   </Button>
                 )}
-                {isOnboardingAdminMode && isAdmin && (
+                {isOnboardingAdminMode && canManageEducation && (
                   <div className="flex gap-2">
                     <Button
                       onClick={() => setIsNewCourseOpen(true)}
@@ -5743,7 +5744,7 @@ function AppContent() {
                           There are no onboarding or training courses created yet. Switch to "Course Builder Mode" in the top bar to create custom chapters, add lessons, and publish your syllabus.
                         </p>
                       </div>
-                      {isAdmin && (
+                      {canManageEducation && (
                         <div className="flex justify-center gap-3">
                           <Button onClick={() => setIsNewCourseOpen(true)} className="bg-red-600 hover:bg-red-700 font-semibold text-xs">
                             Create Custom Course
@@ -5752,7 +5753,7 @@ function AppContent() {
                       )}
                     </div>
                   </Card>
-                  {isAdmin && (
+                  {canManageEducation && (
                     <Dialog open={isNewCourseOpen} onOpenChange={setIsNewCourseOpen}>
                       <DialogContent className="sm:max-w-[450px]">
                         <DialogHeader>
@@ -5816,7 +5817,7 @@ function AppContent() {
                         Select a course below to begin your training, view chapters, and track your certification progress.
                       </p>
                     </div>
-                    {isOnboardingAdminMode && isAdmin && (
+                    {isOnboardingAdminMode && canManageEducation && (
                       <Button onClick={() => setIsNewCourseOpen(true)} className="bg-red-600 hover:bg-red-700 font-semibold text-xs shrink-0">
                         <Plus className="w-3.5 h-3.5 mr-1" /> Create Custom Course
                       </Button>
@@ -5867,7 +5868,7 @@ function AppContent() {
                           </div>
 
                           <div className="bg-slate-50 border-t border-slate-100 p-4 flex gap-2 justify-between items-center mt-auto">
-                            {isOnboardingAdminMode && isAdmin ? (
+                            {isOnboardingAdminMode && canManageEducation ? (
                               <Button 
                                 variant="outline" 
                                 size="sm" 
@@ -5990,7 +5991,7 @@ function AppContent() {
                                 <h5 className="text-xs font-bold text-slate-700 flex items-center gap-1">
                                   <span>{chapter.title}</span>
                                 </h5>
-                                {isOnboardingAdminMode && isAdmin && (
+                                {isOnboardingAdminMode && canManageEducation && (
                                   <div className="flex gap-1">
                                     <Button 
                                       variant="ghost" 
@@ -6055,7 +6056,7 @@ function AppContent() {
                                         </div>
                                       </div>
 
-                                      {isOnboardingAdminMode && isAdmin && (
+                                      {isOnboardingAdminMode && canManageEducation && (
                                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                           <Button 
                                             variant="ghost" 
@@ -6499,7 +6500,7 @@ function AppContent() {
                 </div>
 
                 {/* --- COURSE BUILDER DIALOGS (ONLY ACCESSIBLE FOR ADMINS) --- */}
-                {isAdmin && (
+                {canManageEducation && (
                   <>
                     {/* 1. New/Edit Course Dialog */}
                     <Dialog open={isNewCourseOpen} onOpenChange={setIsNewCourseOpen}>

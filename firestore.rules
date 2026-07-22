@@ -278,22 +278,22 @@ service cloud.firestore {
     // Onboarding Courses collection
     match /courses/{courseId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin() && isValidCourse(request.resource.data);
-      allow delete: if isAdmin();
+      allow write: if isStaff() && isValidCourse(request.resource.data);
+      allow delete: if isStaff();
     }
 
     // Onboarding Chapters collection
     match /chapters/{chapterId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin() && isValidChapter(request.resource.data);
-      allow delete: if isAdmin();
+      allow write: if isStaff() && isValidChapter(request.resource.data);
+      allow delete: if isStaff();
     }
 
     // Onboarding Lessons collection
     match /lessons/{lessonId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin() && isValidLesson(request.resource.data);
-      allow delete: if isAdmin();
+      allow write: if isStaff() && isValidLesson(request.resource.data);
+      allow delete: if isStaff();
     }
 
     // Onboarding Course Progress collection
