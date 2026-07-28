@@ -5723,93 +5723,47 @@ function AppContent() {
               }
             };
 
-            if (courses.length === 0) {
-              return (
-                <motion.div
-                  key="onboarding-empty"
-                  initial={{ opacity: 0, y: 15 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -15 }}
-                  transition={{ duration: 0.25, ease: "easeOut" }}
-                  className="space-y-6"
-                >
-                  <Card className="border-slate-200 bg-white p-12 text-center shadow-sm">
-                    <div className="max-w-md mx-auto space-y-6">
-                      <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto border border-red-100 shadow-sm">
-                        <GraduationCap className="w-8 h-8" />
-                      </div>
-                      <div className="space-y-2">
-                        <h3 className="text-xl font-bold text-slate-900 font-sans">No Onboarding Courses Found</h3>
-                        <p className="text-sm text-slate-500 font-sans leading-relaxed">
-                          There are no onboarding or training courses created yet. Switch to "Course Builder Mode" in the top bar to create custom chapters, add lessons, and publish your syllabus.
-                        </p>
-                      </div>
-                      {canManageEducation && (
-                        <div className="flex justify-center gap-3">
-                          <Button onClick={() => setIsNewCourseOpen(true)} className="bg-red-600 hover:bg-red-700 font-semibold text-xs">
-                            Create Custom Course
-                          </Button>
+            return (
+              <>
+                {courses.length === 0 ? (
+                  <motion.div
+                    key="onboarding-empty"
+                    initial={{ opacity: 0, y: 15 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -15 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                    className="space-y-6"
+                  >
+                    <Card className="border-slate-200 bg-white p-12 text-center shadow-sm">
+                      <div className="max-w-md mx-auto space-y-6">
+                        <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto border border-red-100 shadow-sm">
+                          <GraduationCap className="w-8 h-8" />
                         </div>
-                      )}
-                    </div>
-                  </Card>
-                  {canManageEducation && (
-                    <Dialog open={isNewCourseOpen} onOpenChange={setIsNewCourseOpen}>
-                      <DialogContent className="sm:max-w-[450px]">
-                        <DialogHeader>
-                          <DialogTitle>Create Custom Course</DialogTitle>
-                          <DialogDescription>Add a new coaching or training curriculum for your trainers.</DialogDescription>
-                        </DialogHeader>
-                        <div className="grid gap-4 py-3">
-                          <div className="grid gap-1.5">
-                            <Label htmlFor="course-title">Course Title</Label>
-                            <Input 
-                              id="course-title"
-                              value={newCourse.title}
-                              onChange={(e) => setNewCourse({ ...newCourse, title: e.target.value })}
-                              placeholder="e.g. Front Desk & Reception Training"
-                            />
-                          </div>
-                          <div className="grid gap-1.5">
-                            <Label htmlFor="course-desc">Description</Label>
-                            <Textarea 
-                              id="course-desc"
-                              value={newCourse.description}
-                              onChange={(e) => setNewCourse({ ...newCourse, description: e.target.value })}
-                              placeholder="Describe what the trainers will learn in this course..."
-                            />
-                          </div>
-                          <div className="grid gap-1.5">
-                            <Label htmlFor="course-category">Category</Label>
-                            <Input 
-                              id="course-category"
-                              value={newCourse.category}
-                              onChange={(e) => setNewCourse({ ...newCourse, category: e.target.value })}
-                              placeholder="e.g. Onboarding, Operations, Certifications"
-                            />
-                          </div>
+                        <div className="space-y-2">
+                          <h3 className="text-xl font-bold text-slate-900 font-sans">No Onboarding Courses Found</h3>
+                          <p className="text-sm text-slate-500 font-sans leading-relaxed">
+                            There are no onboarding or training courses created yet. Switch to "Course Builder Mode" in the top bar to create custom chapters, add lessons, and publish your syllabus.
+                          </p>
                         </div>
-                        <DialogFooter>
-                          <Button variant="outline" onClick={() => setIsNewCourseOpen(false)}>Cancel</Button>
-                          <Button onClick={handleCreateCourse} className="bg-red-600 hover:bg-red-700">Create Course</Button>
-                        </DialogFooter>
-                      </DialogContent>
-                    </Dialog>
-                  )}
-                </motion.div>
-              );
-            }
-
-            if (!activeCourseId) {
-              return (
-                <motion.div
-                  key="onboarding-catalog"
-                  initial={{ opacity: 0, y: 15 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -15 }}
-                  transition={{ duration: 0.25, ease: "easeOut" }}
-                  className="space-y-6"
-                >
+                        {canManageEducation && (
+                          <div className="flex justify-center gap-3">
+                            <Button onClick={() => setIsNewCourseOpen(true)} className="bg-red-600 hover:bg-red-700 font-semibold text-xs">
+                              Create Custom Course
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </Card>
+                  </motion.div>
+                ) : !activeCourseId ? (
+                  <motion.div
+                    key="onboarding-catalog"
+                    initial={{ opacity: 0, y: 15 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -15 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                    className="space-y-6"
+                  >
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 bg-white border border-slate-200 rounded-xl shadow-xs">
                     <div className="space-y-1">
                       <h3 className="text-xl font-bold text-slate-900 font-sans">Available Onboarding & Training Courses</h3>
@@ -5904,10 +5858,7 @@ function AppContent() {
                     })}
                   </div>
                 </motion.div>
-              );
-            }
-
-            return (
+              ) : (
               <motion.div
                 key="onboarding-main"
                 initial={{ opacity: 0, y: 15 }}
@@ -6498,9 +6449,11 @@ function AppContent() {
                     )}
                   </div>
                 </div>
+              </motion.div>
+            )}
 
-                {/* --- COURSE BUILDER DIALOGS (ONLY ACCESSIBLE FOR ADMINS) --- */}
-                {canManageEducation && (
+            {/* --- COURSE BUILDER DIALOGS (ALWAYS ACCESSIBLE WHEN AUTHORIZED) --- */}
+            {canManageEducation && (
                   <>
                     {/* 1. New/Edit Course Dialog */}
                     <Dialog open={isNewCourseOpen} onOpenChange={setIsNewCourseOpen}>
@@ -6997,7 +6950,7 @@ function AppContent() {
                     </Dialog>
                   </>
                 )}
-              </motion.div>
+              </>
             );
           })()}
 
