@@ -51,7 +51,12 @@ import {
   Video,
   ArrowLeft,
   Upload,
-  FileVideo
+  FileVideo,
+  Image as ImageIcon,
+  FileImage,
+  Download,
+  Eye,
+  FileSpreadsheet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
@@ -263,6 +268,7 @@ function AppContent() {
   const [activeCourseId, setActiveCourseId] = useState<string | null>(null);
   const [activeLessonId, setActiveLessonId] = useState<string | null>(null);
   const [resolvedLocalUrl, setResolvedLocalUrl] = useState<string | null>(null);
+  const [resolvedLocalType, setResolvedLocalType] = useState<string | null>(null);
   const [isResolvingLocalVideo, setIsResolvingLocalVideo] = useState(false);
   const [videoSourceType, setVideoSourceType] = useState<'link' | 'file'>('link');
   const [isUploadingLocalFile, setIsUploadingLocalFile] = useState(false);
@@ -1050,15 +1056,17 @@ function AppContent() {
       if (activeLessonVideoUrl && activeLessonVideoUrl.startsWith('localfile_')) {
         setIsResolvingLocalVideo(true);
         setResolvedLocalUrl(null);
+        setResolvedLocalType(null);
         try {
           const blob = await getLocalVideoBlob(activeLessonVideoUrl);
           if (blob && active) {
             const objectUrl = URL.createObjectURL(blob);
             urlToRevoke = objectUrl;
             setResolvedLocalUrl(objectUrl);
+            setResolvedLocalType(blob.type || null);
           }
         } catch (error) {
-          console.error('Error resolving local video:', error);
+          console.error('Error resolving local file:', error);
         } finally {
           if (active) {
             setIsResolvingLocalVideo(false);
@@ -1066,6 +1074,7 @@ function AppContent() {
         }
       } else {
         setResolvedLocalUrl(null);
+        setResolvedLocalType(null);
         setIsResolvingLocalVideo(false);
       }
     };
@@ -5705,7 +5714,30 @@ function AppContent() {
             const isDirectVideo = (url: string) => {
               if (!url) return false;
               const cleanUrl = url.toLowerCase().split('?')[0];
-              return cleanUrl.endsWith('.mp4') || cleanUrl.endsWith('.webm') || cleanUrl.endsWith('.ogg') || cleanUrl.endsWith('.mov');
+              return cleanUrl.endsWith('.mp4') || cleanUrl.endsWith('.webm') || cleanUrl.endsWith('.ogg') || cleanUrl.endsWith('.mov') || cleanUrl.startsWith('data:video/');
+            };
+
+            const getMediaType = (url: string | undefined | null, mimeType?: string | null): 'video' | 'pdf' | 'image' | 'doc' | 'embed' => {
+              if (!url) return 'embed';
+              if (mimeType) {
+                if (mimeType.startsWith('image/')) return 'image';
+                if (mimeType === 'application/pdf' || mimeType.includes('pdf')) return 'pdf';
+                if (mimeType.startsWith('video/')) return 'video';
+              }
+              const clean = url.toLowerCase().split('?')[0];
+              if (clean.startsWith('data:image/') || /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(clean)) {
+                return 'image';
+              }
+              if (clean.startsWith('data:application/pdf') || clean.endsWith('.pdf')) {
+                return 'pdf';
+              }
+              if (clean.startsWith('data:video/') || isDirectVideo(url)) {
+                return 'video';
+              }
+              if (/\.(doc|docx|xls|xlsx|csv|txt|ppt|pptx)$/i.test(clean)) {
+                return 'doc';
+              }
+              return 'embed';
             };
 
             const handleNextLesson = () => {
@@ -6074,52 +6106,113 @@ function AppContent() {
                       <Card className="border-slate-200 bg-white shadow-xs overflow-hidden flex flex-col">
                         {/* Video Screen Area */}
                         {activeLesson.videoUrl ? (
-                          <div className="aspect-video w-full bg-slate-950 relative border-b border-slate-200">
+                          <div className="aspect-video w-full bg-slate-950 relative border-b border-slate-200 overflow-hidden flex items-center justify-center">
                             {activeLesson.videoUrl.startsWith('localfile_') ? (
                               isResolvingLocalVideo ? (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 space-y-2">
                                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500"></div>
-                                  <span className="text-xs font-semibold font-mono">Loading local desktop video...</span>
+                                  <span className="text-xs font-semibold font-mono">Loading local lesson file...</span>
                                 </div>
                               ) : resolvedLocalUrl ? (
-                                <video 
-                                  src={resolvedLocalUrl} 
-                                  controls 
-                                  className="w-full h-full object-contain" 
-                                />
+                                (() => {
+                                  const mediaType = getMediaType(activeLesson.videoUrl, resolvedLocalType);
+                                  if (mediaType === 'image') {
+                                    return (
+                                      <div className="w-full h-full p-4 flex flex-col items-center justify-center bg-slate-950 relative">
+                                        <img src={resolvedLocalUrl} alt={activeLesson.title} className="max-h-full max-w-full object-contain rounded shadow-lg" />
+                                        <a href={resolvedLocalUrl} download={`${activeLesson.title}.png`} target="_blank" rel="noopener noreferrer" className="absolute bottom-3 right-3 inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold rounded backdrop-blur-xs transition-all">
+                                          <Download className="w-3 h-3" /> Full Image
+                                        </a>
+                                      </div>
+                                    );
+                                  }
+                                  if (mediaType === 'pdf') {
+                                    return (
+                                      <div className="w-full h-full bg-slate-900 flex flex-col">
+                                        <div className="p-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-slate-300 px-4 text-xs">
+                                          <span className="font-semibold flex items-center gap-1.5 text-slate-200">
+                                            <FileText className="w-4 h-4 text-red-400" /> Lesson PDF Document
+                                          </span>
+                                          <a href={resolvedLocalUrl} download={`${activeLesson.title}.pdf`} className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 text-[11px]">
+                                            <Download className="w-3 h-3" /> Download PDF
+                                          </a>
+                                        </div>
+                                        <iframe src={resolvedLocalUrl} className="w-full h-full min-h-[380px] border-none" title={activeLesson.title} />
+                                      </div>
+                                    );
+                                  }
+                                  return (
+                                    <video 
+                                      src={resolvedLocalUrl} 
+                                      controls 
+                                      className="w-full h-full object-contain" 
+                                    />
+                                  );
+                                })()
                               ) : (
                                 <div className="absolute inset-0 p-8 flex flex-col items-center justify-center text-center bg-slate-900 border-b border-slate-800 space-y-3">
                                   <div className="w-12 h-12 rounded-full bg-red-950/50 text-red-400 border border-red-900/30 flex items-center justify-center shadow-xs">
                                     <FileVideo className="w-6 h-6" />
                                   </div>
                                   <div className="space-y-1">
-                                    <h5 className="text-sm font-bold text-slate-100 font-sans">Local Video File Not Found</h5>
+                                    <h5 className="text-sm font-bold text-slate-100 font-sans">Local Desktop File Not Found</h5>
                                     <p className="text-xs text-slate-400 max-w-md font-sans leading-relaxed">
-                                      This video was uploaded as a local file (<code>{activeLesson.videoUrl.split('_').slice(2).join('_')}</code>) from the creator's desktop.
+                                      This lesson file (<code>{activeLesson.videoUrl.split('_').slice(2).join('_')}</code>) was uploaded from the creator's desktop.
                                     </p>
                                     <p className="text-[10px] text-red-400 max-w-sm font-sans leading-relaxed pt-1 mx-auto">
-                                      Because it is stored in the local browser cache of the device that uploaded it, other team members cannot view it. To make this training video visible globally, please edit this lesson and upload a link to a video already online (YouTube, Vimeo, etc.).
+                                      Because it is stored in the local browser cache of the device that uploaded it, other team members cannot view it unless uploaded on their device or linked via online URL.
                                     </p>
                                   </div>
                                 </div>
                               )
-                            ) : isDirectVideo(activeLesson.videoUrl) ? (
-                              <video 
-                                src={activeLesson.videoUrl} 
-                                controls 
-                                className="w-full h-full object-contain" 
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <iframe 
-                                src={getEmbedUrl(activeLesson.videoUrl)} 
-                                className="w-full h-full border-none"
-                                allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media" 
-                                allowFullScreen
-                                referrerPolicy="no-referrer"
-                                title={activeLesson.title}
-                              />
-                            )}
+                            ) : (() => {
+                              const mediaType = getMediaType(activeLesson.videoUrl);
+                              if (mediaType === 'image') {
+                                return (
+                                  <div className="w-full h-full p-4 flex flex-col items-center justify-center bg-slate-950 relative">
+                                    <img src={activeLesson.videoUrl} alt={activeLesson.title} className="max-h-full max-w-full object-contain rounded shadow-lg" referrerPolicy="no-referrer" />
+                                    <a href={activeLesson.videoUrl} target="_blank" rel="noopener noreferrer" className="absolute bottom-3 right-3 inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold rounded backdrop-blur-xs transition-all">
+                                      <ExternalLink className="w-3 h-3" /> View Image
+                                    </a>
+                                  </div>
+                                );
+                              }
+                              if (mediaType === 'pdf') {
+                                return (
+                                  <div className="w-full h-full bg-slate-900 flex flex-col">
+                                    <div className="p-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-slate-300 px-4 text-xs">
+                                      <span className="font-semibold flex items-center gap-1.5 text-slate-200">
+                                        <FileText className="w-4 h-4 text-red-400" /> Lesson PDF Document
+                                      </span>
+                                      <a href={activeLesson.videoUrl} target="_blank" rel="noopener noreferrer" className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 text-[11px]">
+                                        <ExternalLink className="w-3 h-3" /> Open Full PDF
+                                      </a>
+                                    </div>
+                                    <iframe src={activeLesson.videoUrl} className="w-full h-full min-h-[380px] border-none" title={activeLesson.title} />
+                                  </div>
+                                );
+                              }
+                              if (mediaType === 'video') {
+                                return (
+                                  <video 
+                                    src={activeLesson.videoUrl} 
+                                    controls 
+                                    className="w-full h-full object-contain" 
+                                    referrerPolicy="no-referrer"
+                                  />
+                                );
+                              }
+                              return (
+                                <iframe 
+                                  src={getEmbedUrl(activeLesson.videoUrl)} 
+                                  className="w-full h-full border-none"
+                                  allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media" 
+                                  allowFullScreen
+                                  referrerPolicy="no-referrer"
+                                  title={activeLesson.title}
+                                />
+                              );
+                            })()}
                           </div>
                         ) : (
                           <div className="bg-gradient-to-br from-amber-50/50 to-orange-50/50 p-8 border-b border-slate-100 flex flex-col items-center justify-center text-center space-y-3">
@@ -6352,13 +6445,13 @@ function AppContent() {
                                               <input 
                                                 type="file" 
                                                 id="student-homework-upload"
-                                                accept=".doc,.docx,.xls,.xlsx,.pdf,.txt,.csv" 
+                                                accept="image/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" 
                                                 className="hidden"
                                                 onChange={(e) => {
                                                   if (e.target.files && e.target.files[0]) {
                                                     const file = e.target.files[0];
                                                     if (file.size > 1048576) {
-                                                      toast.error("File size must be under 1MB. For larger documents, share a Google link instead!");
+                                                      toast.error("File size must be under 1MB. For larger files, share a Google link instead!");
                                                       return;
                                                     }
                                                     const reader = new FileReader();
@@ -6373,7 +6466,7 @@ function AppContent() {
                                               />
                                               <label htmlFor="student-homework-upload" className="cursor-pointer flex flex-col items-center gap-1 w-full">
                                                 <Upload className="w-4 h-4 text-slate-400" />
-                                                <span className="text-[10px] font-bold text-slate-600">Select Word, Excel, PDF, or text file</span>
+                                                <span className="text-[10px] font-bold text-slate-700">Select PDF, Image, Word, Excel, or Text file</span>
                                                 <span className="text-[9px] text-slate-400">Drag & drop or click (under 1MB)</span>
                                               </label>
                                             </div>
@@ -6711,20 +6804,20 @@ function AppContent() {
                                     <input 
                                       type="file" 
                                       id="lesson-file-upload" 
-                                      accept="video/*" 
+                                      accept="video/*,image/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" 
                                       className="hidden" 
                                       onChange={async (e) => {
                                         if (e.target.files && e.target.files[0]) {
                                           const file = e.target.files[0];
                                           setIsUploadingLocalFile(true);
-                                          const toastId = toast.loading("Saving video to browser cache...");
+                                          const toastId = toast.loading("Saving file to browser cache...");
                                           try {
                                             const localKey = await saveLocalVideo(file);
                                             setNewLesson({ ...newLesson, videoUrl: localKey });
-                                            toast.success("Desktop video saved successfully to local browser cache! 🎉", { id: toastId });
+                                            toast.success("Desktop file (Video/PDF/Image) saved successfully! 🎉", { id: toastId });
                                           } catch (err) {
                                             console.error(err);
-                                            toast.error("Failed to cache video file.", { id: toastId });
+                                            toast.error("Failed to cache file.", { id: toastId });
                                           } finally {
                                             setIsUploadingLocalFile(false);
                                           }
@@ -6738,7 +6831,7 @@ function AppContent() {
                                       {isUploadingLocalFile ? (
                                         <>
                                           <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-red-500"></div>
-                                          <span className="text-xs font-semibold text-slate-500">Writing file to database cache...</span>
+                                          <span className="text-xs font-semibold text-slate-500">Writing file to browser cache...</span>
                                         </>
                                       ) : (
                                         <>
@@ -6747,7 +6840,7 @@ function AppContent() {
                                           </div>
                                           <div className="space-y-0.5">
                                             <p className="text-xs font-bold text-slate-700">Click to upload or drag & drop</p>
-                                            <p className="text-[10px] text-slate-400">Select any video file from your desktop (MP4, WEBM, MOV)</p>
+                                            <p className="text-[10px] text-slate-500 font-medium">Select any file (Video MP4/MOV, PDF manual, Image diagram, Word/Excel)</p>
                                           </div>
                                         </>
                                       )}
@@ -6847,7 +6940,7 @@ function AppContent() {
                                         <input 
                                           type="file" 
                                           id="homework-file-upload"
-                                          accept=".doc,.docx,.xls,.xlsx,.pdf,.txt,.csv" 
+                                          accept="image/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" 
                                           className="hidden"
                                           onChange={(e) => {
                                             if (e.target.files && e.target.files[0]) {
@@ -6873,8 +6966,8 @@ function AppContent() {
                                         />
                                         <label htmlFor="homework-file-upload" className="cursor-pointer flex flex-col items-center gap-1 w-full h-full">
                                           <Upload className="w-4 h-4 text-slate-400" />
-                                          <span className="text-[10px] font-bold text-slate-600">Upload doc/sheet template (Max 1MB)</span>
-                                          <span className="text-[9px] text-slate-400">PDF, Word, Excel, CSV, TXT</span>
+                                          <span className="text-[10px] font-bold text-slate-700">Upload template (PDF, Image, Word, Excel, CSV, TXT)</span>
+                                          <span className="text-[9px] text-slate-400">Select any reference file (Max 1MB)</span>
                                         </label>
                                       </div>
                                     )}
