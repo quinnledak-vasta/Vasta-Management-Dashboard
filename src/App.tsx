@@ -5690,25 +5690,59 @@ function AppContent() {
 
             const getEmbedUrl = (url: string) => {
               if (!url) return '';
-              if (url.includes('/embed/')) return url;
-              if (url.includes('youtube.com/watch')) {
-                try {
-                  const u = new URL(url);
-                  const v = u.searchParams.get('v');
-                  if (v) return `https://www.youtube.com/embed/${v}`;
-                } catch {}
+              const trimmed = url.trim();
+
+              // Handle YouTube links
+              if (trimmed.includes('youtube.com') || trimmed.includes('youtu.be')) {
+                // 1) youtube.com/shorts/VIDEO_ID
+                if (trimmed.includes('/shorts/')) {
+                  const parts = trimmed.split('/shorts/');
+                  if (parts[1]) {
+                    const id = parts[1].split('?')[0].split('&')[0].split('/')[0];
+                    return `https://www.youtube.com/embed/${id}`;
+                  }
+                }
+                // 2) youtube.com/live/VIDEO_ID
+                if (trimmed.includes('/live/')) {
+                  const parts = trimmed.split('/live/');
+                  if (parts[1]) {
+                    const id = parts[1].split('?')[0].split('&')[0].split('/')[0];
+                    return `https://www.youtube.com/embed/${id}`;
+                  }
+                }
+                // 3) youtube.com/watch?v=VIDEO_ID or m.youtube.com/watch?v=VIDEO_ID
+                if (trimmed.includes('watch')) {
+                  try {
+                    const parsedUrl = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+                    const v = parsedUrl.searchParams.get('v');
+                    if (v) {
+                      return `https://www.youtube.com/embed/${v}`;
+                    }
+                  } catch {}
+                }
+                // 4) youtu.be/VIDEO_ID
+                if (trimmed.includes('youtu.be/')) {
+                  const parts = trimmed.split('youtu.be/');
+                  if (parts[1]) {
+                    const id = parts[1].split('?')[0].split('&')[0].split('/')[0];
+                    return `https://www.youtube.com/embed/${id}`;
+                  }
+                }
+                // 5) already /embed/
+                if (trimmed.includes('/embed/')) {
+                  return trimmed;
+                }
               }
-              if (url.includes('youtu.be/')) {
-                const parts = url.split('/');
-                const v = parts[parts.length - 1];
-                if (v) return `https://www.youtube.com/embed/${v.split('?')[0]}`;
+
+              if (trimmed.includes('vimeo.com/')) {
+                const parts = trimmed.split('vimeo.com/');
+                if (parts[1]) {
+                  const id = parts[1].split('?')[0].split('/')[0];
+                  return `https://player.vimeo.com/video/${id}`;
+                }
               }
-              if (url.includes('vimeo.com/')) {
-                const parts = url.split('/');
-                const id = parts[parts.length - 1];
-                if (id) return `https://player.vimeo.com/video/${id.split('?')[0]}`;
-              }
-              return url;
+
+              return trimmed;
             };
 
             const isDirectVideo = (url: string) => {
@@ -6206,9 +6240,9 @@ function AppContent() {
                                 <iframe 
                                   src={getEmbedUrl(activeLesson.videoUrl)} 
                                   className="w-full h-full border-none"
-                                  allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media" 
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
                                   allowFullScreen
-                                  referrerPolicy="no-referrer"
+                                  referrerPolicy="strict-origin-when-cross-origin"
                                   title={activeLesson.title}
                                 />
                               );
