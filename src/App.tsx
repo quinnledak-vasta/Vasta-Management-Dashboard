@@ -1805,24 +1805,25 @@ function AppContent() {
       return;
     }
 
-    try {
-      const courseData = {
-        title: newCourse.title,
-        description: newCourse.description,
-        category: newCourse.category || 'Onboarding',
-        thumbnailUrl: newCourse.thumbnailUrl || '',
-        createdAt: new Date().toISOString(),
-        createdBy: user.id,
-      };
+    const courseData = {
+      title: newCourse.title,
+      description: newCourse.description,
+      category: newCourse.category || 'Onboarding',
+      thumbnailUrl: newCourse.thumbnailUrl || '',
+      createdAt: new Date().toISOString(),
+      createdBy: user.id,
+    };
 
+    setIsNewCourseOpen(false);
+    setNewCourse({
+      title: '',
+      description: '',
+      category: 'Onboarding',
+      thumbnailUrl: '',
+    });
+
+    try {
       const docRef = await addDoc(collection(db, 'courses'), courseData);
-      setNewCourse({
-        title: '',
-        description: '',
-        category: 'Onboarding',
-        thumbnailUrl: '',
-      });
-      setIsNewCourseOpen(false);
       setActiveCourseId(docRef.id);
       toast.success("Course created successfully");
     } catch (error) {
@@ -1961,22 +1962,26 @@ function AppContent() {
       return;
     }
 
+    const titleToSave = newChapter.title;
+    const orderToSave = Number(newChapter.order) || 1;
+
+    setIsNewChapterOpen(false);
+    setEditingChapterId(null);
+    setNewChapter({
+      courseId: '',
+      title: '',
+      order: (chapters.filter(c => c.courseId === courseId).length + 2),
+    });
+
     try {
       const chapterData = {
         courseId,
-        title: newChapter.title,
-        order: Number(newChapter.order) || 1,
+        title: titleToSave,
+        order: orderToSave,
         createdAt: new Date().toISOString(),
       };
 
       await addDoc(collection(db, 'chapters'), chapterData);
-      setNewChapter({
-        courseId: '',
-        title: '',
-        order: (chapters.filter(c => c.courseId === courseId).length + 2),
-      });
-      setIsNewChapterOpen(false);
-      setEditingChapterId(null);
       toast.success("Chapter created successfully");
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'chapters');
@@ -1990,24 +1995,29 @@ function AppContent() {
       return;
     }
 
+    const chapterIdToUpdate = editingChapterId;
+    const courseId = newChapter.courseId || activeCourseId || (chapters.find(c => c.id === chapterIdToUpdate)?.courseId);
+    const titleToSave = newChapter.title;
+    const orderToSave = Number(newChapter.order) || 1;
+
+    setIsNewChapterOpen(false);
+    setEditingChapterId(null);
+    setNewChapter({
+      courseId: '',
+      title: '',
+      order: 1,
+    });
+
     try {
-      const courseId = newChapter.courseId || activeCourseId || (chapters.find(c => c.id === editingChapterId)?.courseId);
-      await updateDoc(doc(db, 'chapters', editingChapterId), {
-        title: newChapter.title,
-        order: Number(newChapter.order) || 1,
+      await updateDoc(doc(db, 'chapters', chapterIdToUpdate), {
+        title: titleToSave,
+        order: orderToSave,
         ...(courseId ? { courseId } : {}),
       });
 
-      setNewChapter({
-        courseId: '',
-        title: '',
-        order: 1,
-      });
-      setEditingChapterId(null);
-      setIsNewChapterOpen(false);
       toast.success("Chapter updated successfully");
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `chapters/${editingChapterId}`);
+      handleFirestoreError(error, OperationType.UPDATE, `chapters/${chapterIdToUpdate}`);
     }
   };
 
@@ -2035,41 +2045,43 @@ function AppContent() {
       return;
     }
 
-    try {
-      const lessonData = {
-        courseId,
-        chapterId,
-        title: newLesson.title,
-        description: newLesson.description || '',
-        videoUrl: newLesson.videoUrl || '',
-        textBody: newLesson.textBody || '',
-        duration: Number(newLesson.duration) || 5,
-        order: Number(newLesson.order) || 1,
-        createdAt: new Date().toISOString(),
-        hasHomework: !!newLesson.hasHomework,
-        homeworkTitle: newLesson.homeworkTitle || '',
-        homeworkFileUrl: newLesson.homeworkFileUrl || '',
-        homeworkFileName: newLesson.homeworkFileName || '',
-        homeworkFileType: newLesson.homeworkFileType || 'link',
-      };
+    const lessonData = {
+      courseId,
+      chapterId,
+      title: newLesson.title,
+      description: newLesson.description || '',
+      videoUrl: newLesson.videoUrl || '',
+      textBody: newLesson.textBody || '',
+      duration: Number(newLesson.duration) || 5,
+      order: Number(newLesson.order) || 1,
+      createdAt: new Date().toISOString(),
+      hasHomework: !!newLesson.hasHomework,
+      homeworkTitle: newLesson.homeworkTitle || '',
+      homeworkFileUrl: newLesson.homeworkFileUrl || '',
+      homeworkFileName: newLesson.homeworkFileName || '',
+      homeworkFileType: newLesson.homeworkFileType || 'link',
+    };
 
+    setIsNewLessonOpen(false);
+    setEditingLessonId(null);
+    setNewLesson({
+      courseId: '',
+      chapterId: '',
+      title: '',
+      description: '',
+      videoUrl: '',
+      textBody: '',
+      duration: 5,
+      order: (lessons.filter(l => l.chapterId === chapterId).length + 2),
+      hasHomework: false,
+      homeworkTitle: '',
+      homeworkFileUrl: '',
+      homeworkFileName: '',
+      homeworkFileType: 'link',
+    });
+
+    try {
       await addDoc(collection(db, 'lessons'), lessonData);
-      setNewLesson({
-        courseId: '',
-        chapterId: '',
-        title: '',
-        description: '',
-        videoUrl: '',
-        textBody: '',
-        duration: 5,
-        order: (lessons.filter(l => l.chapterId === chapterId).length + 2),
-        hasHomework: false,
-        homeworkTitle: '',
-        homeworkFileUrl: '',
-        homeworkFileName: '',
-        homeworkFileType: 'link',
-      });
-      setIsNewLessonOpen(false);
       toast.success("Lesson created successfully");
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'lessons');
@@ -2191,46 +2203,49 @@ function AppContent() {
       return;
     }
 
+    const lessonIdToUpdate = editingLessonId;
+    const targetChapter = chapters.find(c => c.id === newLesson.chapterId);
+    const targetCourseId = targetChapter ? targetChapter.courseId : (newLesson.courseId || activeCourseId);
+
+    const updateFields = {
+      title: newLesson.title,
+      description: newLesson.description || '',
+      videoUrl: newLesson.videoUrl || '',
+      textBody: newLesson.textBody || '',
+      duration: Number(newLesson.duration) || 5,
+      order: Number(newLesson.order) || 1,
+      ...(newLesson.chapterId ? { chapterId: newLesson.chapterId } : {}),
+      ...(targetCourseId ? { courseId: targetCourseId } : {}),
+      hasHomework: !!newLesson.hasHomework,
+      homeworkTitle: newLesson.homeworkTitle || '',
+      homeworkFileUrl: newLesson.homeworkFileUrl || '',
+      homeworkFileName: newLesson.homeworkFileName || '',
+      homeworkFileType: newLesson.homeworkFileType || 'link',
+    };
+
+    setIsNewLessonOpen(false);
+    setEditingLessonId(null);
+    setNewLesson({
+      courseId: '',
+      chapterId: '',
+      title: '',
+      description: '',
+      videoUrl: '',
+      textBody: '',
+      duration: 5,
+      order: 1,
+      hasHomework: false,
+      homeworkTitle: '',
+      homeworkFileUrl: '',
+      homeworkFileName: '',
+      homeworkFileType: 'link',
+    });
+
     try {
-      const targetChapter = chapters.find(c => c.id === newLesson.chapterId);
-      const targetCourseId = targetChapter ? targetChapter.courseId : (newLesson.courseId || activeCourseId);
-
-      await updateDoc(doc(db, 'lessons', editingLessonId), {
-        title: newLesson.title,
-        description: newLesson.description || '',
-        videoUrl: newLesson.videoUrl || '',
-        textBody: newLesson.textBody || '',
-        duration: Number(newLesson.duration) || 5,
-        order: Number(newLesson.order) || 1,
-        ...(newLesson.chapterId ? { chapterId: newLesson.chapterId } : {}),
-        ...(targetCourseId ? { courseId: targetCourseId } : {}),
-        hasHomework: !!newLesson.hasHomework,
-        homeworkTitle: newLesson.homeworkTitle || '',
-        homeworkFileUrl: newLesson.homeworkFileUrl || '',
-        homeworkFileName: newLesson.homeworkFileName || '',
-        homeworkFileType: newLesson.homeworkFileType || 'link',
-      });
-
-      setNewLesson({
-        courseId: '',
-        chapterId: '',
-        title: '',
-        description: '',
-        videoUrl: '',
-        textBody: '',
-        duration: 5,
-        order: 1,
-        hasHomework: false,
-        homeworkTitle: '',
-        homeworkFileUrl: '',
-        homeworkFileName: '',
-        homeworkFileType: 'link',
-      });
-      setEditingLessonId(null);
-      setIsNewLessonOpen(false);
+      await updateDoc(doc(db, 'lessons', lessonIdToUpdate), updateFields);
       toast.success("Lesson updated successfully");
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `lessons/${editingLessonId}`);
+      handleFirestoreError(error, OperationType.UPDATE, `lessons/${lessonIdToUpdate}`);
     }
   };
 
