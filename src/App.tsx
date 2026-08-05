@@ -108,7 +108,7 @@ import { AuthProvider, useAuth } from './lib/AuthContext';
 import { LoginPage } from './components/LoginPage';
 import { TrainerCheckInPanel } from './components/TrainerCheckInPanel';
 import { db, auth } from './lib/firebase';
-import { saveLocalVideo, getLocalVideoBlob } from './lib/videoCache';
+import { saveLocalVideo, getLocalVideoBlob, syncAllLocalVideosToFirestore } from './lib/videoCache';
 import { 
   collection, 
   onSnapshot, 
@@ -1071,6 +1071,9 @@ function AppContent() {
   // Fetch Onboarding Courses from Firestore
   useEffect(() => {
     if (!user) return;
+    // Automatically background sync any local browser lesson files to Firestore cloud storage
+    syncAllLocalVideosToFirestore().catch(err => console.warn('Background video sync error:', err));
+
     const path = 'courses';
     const q = query(collection(db, path), orderBy('createdAt', 'asc'));
 
