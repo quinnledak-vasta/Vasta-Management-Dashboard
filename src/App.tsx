@@ -315,6 +315,7 @@ function AppContent() {
   
   const [isNewCourseOpen, setIsNewCourseOpen] = useState(false);
   const [isNewChapterOpen, setIsNewChapterOpen] = useState(false);
+  const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
   const [isNewLessonOpen, setIsNewLessonOpen] = useState(false);
   const [editingLessonId, setEditingLessonId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{
@@ -1975,9 +1976,38 @@ function AppContent() {
         order: (chapters.filter(c => c.courseId === courseId).length + 2),
       });
       setIsNewChapterOpen(false);
+      setEditingChapterId(null);
       toast.success("Chapter created successfully");
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'chapters');
+    }
+  };
+
+  const handleUpdateChapter = async () => {
+    if (!user || !canManageEducation || !editingChapterId) return;
+    if (!newChapter.title) {
+      toast.error("Please enter a chapter title");
+      return;
+    }
+
+    try {
+      const courseId = newChapter.courseId || activeCourseId || (chapters.find(c => c.id === editingChapterId)?.courseId);
+      await updateDoc(doc(db, 'chapters', editingChapterId), {
+        title: newChapter.title,
+        order: Number(newChapter.order) || 1,
+        ...(courseId ? { courseId } : {}),
+      });
+
+      setNewChapter({
+        courseId: '',
+        title: '',
+        order: 1,
+      });
+      setEditingChapterId(null);
+      setIsNewChapterOpen(false);
+      toast.success("Chapter updated successfully");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `chapters/${editingChapterId}`);
     }
   };
 
@@ -2162,6 +2192,9 @@ function AppContent() {
     }
 
     try {
+      const targetChapter = chapters.find(c => c.id === newLesson.chapterId);
+      const targetCourseId = targetChapter ? targetChapter.courseId : (newLesson.courseId || activeCourseId);
+
       await updateDoc(doc(db, 'lessons', editingLessonId), {
         title: newLesson.title,
         description: newLesson.description || '',
@@ -2169,6 +2202,8 @@ function AppContent() {
         textBody: newLesson.textBody || '',
         duration: Number(newLesson.duration) || 5,
         order: Number(newLesson.order) || 1,
+        ...(newLesson.chapterId ? { chapterId: newLesson.chapterId } : {}),
+        ...(targetCourseId ? { courseId: targetCourseId } : {}),
         hasHomework: !!newLesson.hasHomework,
         homeworkTitle: newLesson.homeworkTitle || '',
         homeworkFileUrl: newLesson.homeworkFileUrl || '',
@@ -6135,11 +6170,30 @@ function AppContent() {
                                     <Button 
                                       variant="ghost" 
                                       size="sm" 
+                                      className="h-6 w-6 p-0 text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setNewChapter({
+                                          courseId: chapter.courseId,
+                                          title: chapter.title,
+                                          order: chapter.order || 1,
+                                        });
+                                        setEditingChapterId(chapter.id);
+                                        setIsNewChapterOpen(true);
+                                      }}
+                                      title="Edit Chapter"
+                                    >
+                                      <Edit2 className="w-3 h-3" />
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
                                       className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleDeleteChapter(chapter.id);
                                       }}
+                                      title="Delete Chapter"
                                     >
                                       <Trash2 className="w-3 h-3" />
                                     </Button>
@@ -6391,7 +6445,36 @@ function AppContent() {
                                 <p className="text-xs text-slate-500 font-sans">{activeLesson.description}</p>
                               )}
                             </div>
-                            <div className="flex gap-2 shrink-0">
+                            <div className="flex items-center gap-2 shrink-0">
+                              {isOnboardingAdminMode && canManageEducation && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-6 text-xs font-semibold text-slate-600 hover:text-slate-900 border-slate-200 flex items-center gap-1 px-2"
+                                  onClick={() => {
+                                    setNewLesson({
+                                      courseId: activeLesson.courseId,
+                                      chapterId: activeLesson.chapterId,
+                                      title: activeLesson.title,
+                                      description: activeLesson.description || '',
+                                      videoUrl: activeLesson.videoUrl || '',
+                                      textBody: activeLesson.textBody || '',
+                                      duration: activeLesson.duration || 5,
+                                      order: activeLesson.order || 1,
+                                      hasHomework: !!activeLesson.hasHomework,
+                                      homeworkTitle: activeLesson.homeworkTitle || '',
+                                      homeworkFileUrl: activeLesson.homeworkFileUrl || '',
+                                      homeworkFileName: activeLesson.homeworkFileName || '',
+                                      homeworkFileType: activeLesson.homeworkFileType || 'link',
+                                    });
+                                    setEditingLessonId(activeLesson.id);
+                                    setIsNewLessonOpen(true);
+                                  }}
+                                  title="Edit active lesson"
+                                >
+                                  <Edit2 className="w-3 h-3" /> Edit
+                                </Button>
+                              )}
                               <Badge variant="outline" className="text-xs font-semibold px-2 py-0.5 bg-slate-50 text-slate-600 flex items-center gap-1">
                                 <Clock className="w-3 h-3" /> {activeLesson.duration || 5} mins
                               </Badge>
@@ -6770,14 +6853,42 @@ function AppContent() {
                       </DialogContent>
                     </Dialog>
 
-                    {/* 2. New Chapter Dialog */}
-                    <Dialog open={isNewChapterOpen} onOpenChange={setIsNewChapterOpen}>
+                    {/* 2. New/Edit Chapter Dialog */}
+                    <Dialog open={isNewChapterOpen} onOpenChange={(open) => {
+                      setIsNewChapterOpen(open);
+                      if (!open) {
+                        setEditingChapterId(null);
+                        setNewChapter({
+                          courseId: '',
+                          title: '',
+                          order: 1,
+                        });
+                      }
+                    }}>
                       <DialogContent className="sm:max-w-[400px]">
                         <DialogHeader>
-                          <DialogTitle>Add New Chapter</DialogTitle>
+                          <DialogTitle>{editingChapterId ? 'Edit Chapter' : 'Add New Chapter'}</DialogTitle>
                           <DialogDescription>Group training lessons into sequential chapters.</DialogDescription>
                         </DialogHeader>
                         <div className="grid gap-4 py-3">
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="chapter-course">Course</Label>
+                            <Select 
+                              value={newChapter.courseId || activeCourseId || ''} 
+                              onValueChange={(val) => setNewChapter({ ...newChapter, courseId: val })}
+                            >
+                              <SelectTrigger>
+                                <span className={`flex flex-1 text-left truncate text-sm ${!(newChapter.courseId || activeCourseId) ? 'text-slate-400' : 'text-slate-900'}`}>
+                                  {courses.find(c => c.id === (newChapter.courseId || activeCourseId))?.title || "Choose a course..."}
+                                </span>
+                              </SelectTrigger>
+                              <SelectContent>
+                                {courses.map(c => (
+                                  <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
                           <div className="grid gap-1.5">
                             <Label htmlFor="chapter-title">Chapter Title</Label>
                             <Input 
@@ -6799,8 +6910,16 @@ function AppContent() {
                           </div>
                         </div>
                         <DialogFooter>
-                          <Button variant="outline" onClick={() => setIsNewChapterOpen(false)}>Cancel</Button>
-                          <Button onClick={handleCreateChapter} className="bg-red-600 hover:bg-red-700">Create Chapter</Button>
+                          <Button variant="outline" onClick={() => {
+                            setEditingChapterId(null);
+                            setIsNewChapterOpen(false);
+                          }}>Cancel</Button>
+                          <Button 
+                            onClick={editingChapterId ? handleUpdateChapter : handleCreateChapter} 
+                            className="bg-red-600 hover:bg-red-700"
+                          >
+                            {editingChapterId ? 'Save Changes' : 'Create Chapter'}
+                          </Button>
                         </DialogFooter>
                       </DialogContent>
                     </Dialog>
@@ -6833,26 +6952,34 @@ function AppContent() {
                           <DialogDescription>Upload instruction videos, set descriptions, and write accompanying checklists.</DialogDescription>
                         </DialogHeader>
                         <div className="grid gap-4 py-3">
-                          {!editingLessonId && (
-                            <div className="grid gap-1.5">
-                              <Label htmlFor="lesson-chapter">Chapter Section</Label>
-                              <Select 
-                                value={newLesson.chapterId} 
-                                onValueChange={(val) => setNewLesson({ ...newLesson, chapterId: val })}
-                              >
-                                <SelectTrigger>
-                                  <span className={`flex flex-1 text-left truncate text-sm ${!newLesson.chapterId ? 'text-slate-400' : 'text-slate-900'}`}>
-                                    {courseChapters.find(chap => chap.id === newLesson.chapterId)?.title || "Choose a chapter..."}
-                                  </span>
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {courseChapters.map(chap => (
-                                    <SelectItem key={chap.id} value={chap.id}>{chap.title}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          )}
+                          <div className="grid gap-1.5">
+                            <Label htmlFor="lesson-chapter">Chapter Section</Label>
+                            <Select 
+                              value={newLesson.chapterId} 
+                              onValueChange={(val) => {
+                                const selectedChap = chapters.find(c => c.id === val);
+                                setNewLesson({ 
+                                  ...newLesson, 
+                                  chapterId: val,
+                                  ...(selectedChap ? { courseId: selectedChap.courseId } : {})
+                                });
+                              }}
+                            >
+                              <SelectTrigger>
+                                <span className={`flex flex-1 text-left truncate text-sm ${!newLesson.chapterId ? 'text-slate-400' : 'text-slate-900'}`}>
+                                  {chapters.find(chap => chap.id === newLesson.chapterId)?.title || "Choose a chapter..."}
+                                </span>
+                              </SelectTrigger>
+                              <SelectContent>
+                                {(chapters.filter(c => !activeCourseId || c.courseId === activeCourseId || c.id === newLesson.chapterId).length > 0
+                                  ? chapters.filter(c => !activeCourseId || c.courseId === activeCourseId || c.id === newLesson.chapterId)
+                                  : chapters
+                                ).map(chap => (
+                                  <SelectItem key={chap.id} value={chap.id}>{chap.title}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
                           <div className="grid gap-1.5">
                             <Label htmlFor="lesson-title">Lesson Title</Label>
                             <Input 
