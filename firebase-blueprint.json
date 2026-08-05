@@ -204,6 +204,21 @@
         "createdByName": { "type": "string" }
       },
       "required": ["title", "date", "type", "createdAt", "createdBy", "createdByName"]
+    },
+    "LessonFile": {
+      "title": "LessonFile",
+      "description": "Shared file attachment/document/video for onboarding course content",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileType": { "type": "string" },
+        "size": { "type": "number" },
+        "totalChunks": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "uploadedBy": { "type": "string" }
+      },
+      "required": ["id", "fileName", "totalChunks"]
     }
   },
   "firestore": {
@@ -258,6 +273,10 @@
     "/staff_events/{eventId}": {
       "schema": "StaffEvent",
       "description": "Staff social and operations events calendar"
+    },
+    "/lesson_files/{fileId}": {
+      "schema": "LessonFile",
+      "description": "Shared course files and documents"
     }
   }
 }

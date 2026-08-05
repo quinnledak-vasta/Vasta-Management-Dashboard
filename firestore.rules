@@ -310,6 +310,19 @@ service cloud.firestore {
       allow update: if isStaff() && isValidStaffEvent(request.resource.data);
       allow delete: if isAdmin() || (isAuthenticated() && resource.data.createdBy == request.auth.uid);
     }
+
+    // Shared Lesson Files collection
+    match /lesson_files/{fileId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isStaff();
+
+      match /chunks/{chunkId} {
+        allow read: if isAuthenticated();
+        allow create, update: if isAuthenticated();
+        allow delete: if isStaff();
+      }
+    }
     
     // Default deny for everything else
     match /{document=**} {

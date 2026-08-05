@@ -247,7 +247,27 @@ function AppContent() {
   const [inventoryReports, setInventoryReports] = useState<InventoryReport[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [staffEvents, setStaffEvents] = useState<StaffEvent[]>([]);
-  const [resourcesSubTab, setResourcesSubTab] = useState<'links' | 'calendar'>('links');
+  const [resourcesSubTab, setResourcesSubTab] = useState<'links' | 'calendar'>(() => {
+    try {
+      const saved = localStorage.getItem('vasta_resources_sub_tab');
+      if (saved === 'links' || saved === 'calendar') return saved;
+    } catch {}
+    return 'links';
+  });
+  const [vacationSubTab, setVacationSubTab] = useState<string>(() => {
+    try {
+      return localStorage.getItem('vasta_vacation_sub_tab') || 'calendar';
+    } catch {
+      return 'calendar';
+    }
+  });
+  const [inventorySubTab, setInventorySubTab] = useState<string>(() => {
+    try {
+      return localStorage.getItem('vasta_inventory_sub_tab') || 'equipment';
+    } catch {
+      return 'equipment';
+    }
+  });
   const [isNewEventOpen, setIsNewEventOpen] = useState(false);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<Date | null>(null);
   const [newEvent, setNewEvent] = useState({
@@ -265,8 +285,20 @@ function AppContent() {
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [progressList, setProgressList] = useState<UserLessonProgress[]>([]);
   
-  const [activeCourseId, setActiveCourseId] = useState<string | null>(null);
-  const [activeLessonId, setActiveLessonId] = useState<string | null>(null);
+  const [activeCourseId, setActiveCourseId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('vasta_active_course_id') || null;
+    } catch {
+      return null;
+    }
+  });
+  const [activeLessonId, setActiveLessonId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('vasta_active_lesson_id') || null;
+    } catch {
+      return null;
+    }
+  });
   const [resolvedLocalUrl, setResolvedLocalUrl] = useState<string | null>(null);
   const [resolvedLocalType, setResolvedLocalType] = useState<string | null>(null);
   const [isResolvingLocalVideo, setIsResolvingLocalVideo] = useState(false);
@@ -425,6 +457,88 @@ function AppContent() {
     url: '',
     category: ''
   });
+
+  // Navigation Persistence Sync Effects
+  useEffect(() => {
+    if (activeTab) {
+      try {
+        localStorage.setItem('vasta_active_tab', activeTab);
+        const newHash = `#${activeTab}`;
+        if (window.location.hash !== newHash) {
+          window.history.replaceState(null, '', newHash);
+        }
+      } catch (e) {
+        console.error("Failed to persist active tab:", e);
+      }
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('vasta_resources_sub_tab', resourcesSubTab);
+    } catch {}
+  }, [resourcesSubTab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('vasta_vacation_sub_tab', vacationSubTab);
+    } catch {}
+  }, [vacationSubTab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('vasta_inventory_sub_tab', inventorySubTab);
+    } catch {}
+  }, [inventorySubTab]);
+
+  useEffect(() => {
+    try {
+      if (activeCourseId) {
+        localStorage.setItem('vasta_active_course_id', activeCourseId);
+      } else {
+        localStorage.removeItem('vasta_active_course_id');
+      }
+    } catch {}
+  }, [activeCourseId]);
+
+  useEffect(() => {
+    try {
+      if (activeLessonId) {
+        localStorage.setItem('vasta_active_lesson_id', activeLessonId);
+      } else {
+        localStorage.removeItem('vasta_active_lesson_id');
+      }
+    } catch {}
+  }, [activeLessonId]);
+
+  useEffect(() => {
+    const handleNavigationChange = () => {
+      try {
+        const validTabs = ['tasks', 'team', 'staff', 'vacations', 'inventory', 'resources', 'marketing', 'onboarding'];
+        const params = new URLSearchParams(window.location.search);
+        const tabParam = params.get('tab');
+        if (tabParam && validTabs.includes(tabParam)) {
+          setActiveTab(tabParam);
+          return;
+        }
+        if (window.location.hash) {
+          const hashTab = window.location.hash.replace('#', '');
+          if (validTabs.includes(hashTab)) {
+            setActiveTab(hashTab);
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    window.addEventListener('hashchange', handleNavigationChange);
+    window.addEventListener('popstate', handleNavigationChange);
+    return () => {
+      window.removeEventListener('hashchange', handleNavigationChange);
+      window.removeEventListener('popstate', handleNavigationChange);
+    };
+  }, []);
 
   // Fetch Tasks from Firestore
   useEffect(() => {
@@ -966,9 +1080,14 @@ function AppContent() {
         ...doc.data()
       })) as Course[];
       setCourses(courseList);
-      if (courseList.length === 1 && !activeCourseId) {
-        setActiveCourseId(courseList[0].id);
-      }
+      try {
+        const savedCourseId = localStorage.getItem('vasta_active_course_id');
+        if (savedCourseId && courseList.some(c => c.id === savedCourseId)) {
+          setActiveCourseId(savedCourseId);
+        } else if (courseList.length === 1 && !activeCourseId) {
+          setActiveCourseId(courseList[0].id);
+        }
+      } catch {}
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, path);
     });
@@ -1053,7 +1172,7 @@ function AppContent() {
     let urlToRevoke: string | null = null;
 
     const resolveVideo = async () => {
-      if (activeLessonVideoUrl && activeLessonVideoUrl.startsWith('localfile_')) {
+      if (activeLessonVideoUrl && (activeLessonVideoUrl.startsWith('localfile_') || activeLessonVideoUrl.startsWith('firestorefile_'))) {
         setIsResolvingLocalVideo(true);
         setResolvedLocalUrl(null);
         setResolvedLocalType(null);
@@ -1099,7 +1218,7 @@ function AppContent() {
   // Synchronize videoSourceType state when a lesson modal is opened
   useEffect(() => {
     if (isNewLessonOpen) {
-      if (newLesson.videoUrl && newLesson.videoUrl.startsWith('localfile_')) {
+      if (newLesson.videoUrl && (newLesson.videoUrl.startsWith('localfile_') || newLesson.videoUrl.startsWith('firestorefile_'))) {
         setVideoSourceType('file');
       } else {
         setVideoSourceType('link');
@@ -4625,7 +4744,7 @@ function AppContent() {
           )}
 
           {activeTab === 'vacations' && (
-            <Tabs defaultValue="calendar" className="w-full">
+            <Tabs value={vacationSubTab} onValueChange={setVacationSubTab} className="w-full">
               <motion.div 
                 key="vacations"
                 initial={{ opacity: 0, x: 20 }}
@@ -4953,7 +5072,7 @@ function AppContent() {
           )}
 
           {activeTab === 'inventory' && (
-            <Tabs defaultValue="equipment" className="w-full">
+            <Tabs value={inventorySubTab} onValueChange={setInventorySubTab} className="w-full">
               <motion.div 
                 key="inventory"
                 initial={{ opacity: 0, x: 20 }}
@@ -6141,11 +6260,11 @@ function AppContent() {
                         {/* Video Screen Area */}
                         {activeLesson.videoUrl ? (
                           <div className="aspect-video w-full bg-slate-950 relative border-b border-slate-200 overflow-hidden flex items-center justify-center">
-                            {activeLesson.videoUrl.startsWith('localfile_') ? (
+                            {(activeLesson.videoUrl.startsWith('localfile_') || activeLesson.videoUrl.startsWith('firestorefile_')) ? (
                               isResolvingLocalVideo ? (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 space-y-2">
                                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500"></div>
-                                  <span className="text-xs font-semibold font-mono">Loading local lesson file...</span>
+                                  <span className="text-xs font-semibold font-mono">Loading shared lesson file...</span>
                                 </div>
                               ) : resolvedLocalUrl ? (
                                 (() => {
@@ -6189,12 +6308,12 @@ function AppContent() {
                                     <FileVideo className="w-6 h-6" />
                                   </div>
                                   <div className="space-y-1">
-                                    <h5 className="text-sm font-bold text-slate-100 font-sans">Local Desktop File Not Found</h5>
+                                    <h5 className="text-sm font-bold text-slate-100 font-sans">Lesson File Unavailable</h5>
                                     <p className="text-xs text-slate-400 max-w-md font-sans leading-relaxed">
-                                      This lesson file (<code>{activeLesson.videoUrl.split('_').slice(2).join('_')}</code>) was uploaded from the creator's desktop.
+                                      This lesson file (<code>{activeLesson.videoUrl.replace(/^(firestorefile_|localfile_)/, '')}</code>) could not be retrieved.
                                     </p>
-                                    <p className="text-[10px] text-red-400 max-w-sm font-sans leading-relaxed pt-1 mx-auto">
-                                      Because it is stored in the local browser cache of the device that uploaded it, other team members cannot view it unless uploaded on their device or linked via online URL.
+                                    <p className="text-[10px] text-slate-400 max-w-sm font-sans leading-relaxed pt-1 mx-auto">
+                                      Please check network connection or ask the creator to open the lesson to sync it to shared cloud storage.
                                     </p>
                                   </div>
                                 </div>
@@ -6475,7 +6594,30 @@ function AppContent() {
                                               </Button>
                                             </div>
                                           ) : (
-                                            <div className="relative border border-dashed border-slate-200 rounded-lg p-4 bg-slate-50/50 flex flex-col items-center justify-center text-center">
+                                            <div 
+                                              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                              onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                              onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                              onDrop={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                                                  const file = e.dataTransfer.files[0];
+                                                  if (file.size > 1048576) {
+                                                    toast.error("File size must be under 1MB. For larger files, share a Google link instead!");
+                                                    return;
+                                                  }
+                                                  const reader = new FileReader();
+                                                  reader.onload = (loadEvt) => {
+                                                    const base64Url = loadEvt.target?.result as string;
+                                                    setStudentHomeworkFileUrl(base64Url);
+                                                    setStudentHomeworkFileName(file.name);
+                                                  };
+                                                  reader.readAsDataURL(file);
+                                                }
+                                              }}
+                                              className="relative border border-dashed border-slate-200 rounded-lg p-4 bg-slate-50/50 flex flex-col items-center justify-center text-center hover:border-slate-300 transition-all"
+                                            >
                                               <input 
                                                 type="file" 
                                                 id="student-homework-upload"
@@ -6764,7 +6906,7 @@ function AppContent() {
                                 <Label htmlFor="lesson-video" className="text-[10px] text-slate-500 font-semibold">Video Link (YouTube, Vimeo, MP4, etc.)</Label>
                                 <Input 
                                   id="lesson-video"
-                                  value={newLesson.videoUrl.startsWith('localfile_') ? '' : newLesson.videoUrl}
+                                  value={(newLesson.videoUrl.startsWith('localfile_') || newLesson.videoUrl.startsWith('firestorefile_')) ? '' : newLesson.videoUrl}
                                   onChange={(e) => setNewLesson({ ...newLesson, videoUrl: e.target.value })}
                                   placeholder="https://www.youtube.com/watch?v=..."
                                   className="h-9 text-xs"
@@ -6773,7 +6915,7 @@ function AppContent() {
                               </div>
                             ) : (
                               <div className="pt-1">
-                                {newLesson.videoUrl.startsWith('localfile_') ? (
+                                {(newLesson.videoUrl.startsWith('localfile_') || newLesson.videoUrl.startsWith('firestorefile_')) ? (
                                   <div className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg shadow-2xs">
                                     <div className="flex items-center gap-2.5 overflow-hidden">
                                       <div className="p-2 bg-red-50 border border-red-100 rounded-md text-red-600 shrink-0">
@@ -6781,9 +6923,9 @@ function AppContent() {
                                       </div>
                                       <div className="text-left overflow-hidden">
                                         <p className="text-xs font-bold text-slate-800 truncate">
-                                          {newLesson.videoUrl.split('_').slice(2).join('_') || "Desktop Video File"}
+                                          {newLesson.videoUrl.replace(/^(firestorefile_|localfile_)/, '').split('_').slice(2).join('_') || "Uploaded Course File"}
                                         </p>
-                                        <p className="text-[10px] text-emerald-600 font-medium font-mono">Stored in browser cache</p>
+                                        <p className="text-[10px] text-emerald-600 font-medium font-mono">Synced to shared cloud storage</p>
                                       </div>
                                     </div>
                                     <Button
@@ -6811,16 +6953,12 @@ function AppContent() {
                                       setUploadDragActive(false);
                                       if (e.dataTransfer.files && e.dataTransfer.files[0]) {
                                         const file = e.dataTransfer.files[0];
-                                        if (!file.type.startsWith('video/')) {
-                                          toast.error("Please upload a valid video file.");
-                                          return;
-                                        }
                                         setIsUploadingLocalFile(true);
-                                        const toastId = toast.loading("Saving video to browser cache...");
+                                        const toastId = toast.loading("Saving file to storage...");
                                         try {
                                           const localKey = await saveLocalVideo(file);
                                           setNewLesson({ ...newLesson, videoUrl: localKey });
-                                          toast.success("Desktop video saved successfully to local browser cache! 🎉", { id: toastId });
+                                          toast.success("Desktop file saved successfully! 🎉", { id: toastId });
                                         } catch (err) {
                                           console.error(err);
                                           toast.error("Failed to cache video file.", { id: toastId });
@@ -6970,7 +7108,35 @@ function AppContent() {
                                         </Button>
                                       </div>
                                     ) : (
-                                      <div className="relative border border-dashed border-slate-200 rounded-lg p-3 bg-white flex flex-col items-center justify-center text-center">
+                                      <div 
+                                        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                        onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                        onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                        onDrop={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                                            const file = e.dataTransfer.files[0];
+                                            if (file.size > 1048576) {
+                                              toast.error("File is too large! Please upload a file under 1MB, or share a Google Link.");
+                                              return;
+                                            }
+                                            const reader = new FileReader();
+                                            reader.onload = (uploadEvt) => {
+                                              const base64Url = uploadEvt.target?.result as string;
+                                              setNewLesson({
+                                                ...newLesson,
+                                                homeworkFileUrl: base64Url,
+                                                homeworkFileName: file.name,
+                                                homeworkFileType: 'file'
+                                              });
+                                              toast.success("Homework template loaded! Save the lesson to complete.");
+                                            };
+                                            reader.readAsDataURL(file);
+                                          }
+                                        }}
+                                        className="relative border border-dashed border-slate-200 rounded-lg p-3 bg-white flex flex-col items-center justify-center text-center hover:border-slate-300 transition-all"
+                                      >
                                         <input 
                                           type="file" 
                                           id="homework-file-upload"
