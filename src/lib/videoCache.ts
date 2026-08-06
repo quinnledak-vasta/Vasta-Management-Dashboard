@@ -30,17 +30,29 @@ function fileToDataUrl(file: File | Blob): Promise<string> {
 
 function dataUrlToBlob(dataUrl: string): Blob {
   try {
-    const parts = dataUrl.split(',');
-    const mimeMatch = parts[0].match(/:(.*?);/);
-    const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
-    const bstr = atob(parts[1]);
+    let mime = 'application/octet-stream';
+    let base64Data = dataUrl;
+
+    if (dataUrl.includes(',')) {
+      const parts = dataUrl.split(',');
+      const mimeMatch = parts[0].match(/:(.*?);/);
+      if (mimeMatch) mime = mimeMatch[1];
+      base64Data = parts[1] || '';
+    }
+
+    if (!base64Data) {
+      return new Blob([], { type: mime });
+    }
+
+    const bstr = atob(base64Data);
     let n = bstr.length;
     const u8arr = new Uint8Array(n);
     while (n--) {
       u8arr[n] = bstr.charCodeAt(n);
     }
     return new Blob([u8arr], { type: mime });
-  } catch {
+  } catch (err) {
+    console.error('Error converting data URL to Blob:', err);
     return new Blob([], { type: 'application/octet-stream' });
   }
 }
@@ -78,43 +90,38 @@ export async function saveLocalVideo(file: File): Promise<string> {
   const fileId = `file_${timestamp}_${randomStr}_${cleanName}`;
   const key = `firestorefile_${fileId}`;
 
-  // Save to IndexedDB locally with multiple lookup key aliases for safety
+  // Create a clean, cloneable Blob to avoid DOM File handle serialization issues
+  let blob: Blob;
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    blob = new Blob([arrayBuffer], { type: file.type || 'application/octet-stream' });
+  } catch {
+    blob = new Blob([file], { type: file.type || 'application/octet-stream' });
+  }
+
+  // Save to IndexedDB locally for instant availability
   await new Promise<void>((resolve, reject) => {
     const transaction = dbInst.transaction(STORE_NAME, 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    store.put(file, key);
-    store.put(file, fileId);
-    store.put(file, file.name);
+    store.put(blob, key);
+    if (fileId !== key) {
+      store.put(blob, fileId);
+    }
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
   });
 
-  // Convert and sync to Firestore for cloud sharing across all team members
-  try {
-    const dataUrl = await fileToDataUrl(file);
-    const chunks = chunkString(dataUrl, 400000);
-
-    await setDoc(doc(db, 'lesson_files', fileId), {
-      id: fileId,
-      fileName: file.name,
-      fileType: file.type || 'application/octet-stream',
-      size: file.size,
-      totalChunks: chunks.length,
-      createdAt: new Date().toISOString()
-    });
-
-    await uploadChunksToFirestore(fileId, chunks);
-    console.log(`Successfully synced lesson file ${fileId} (${chunks.length} chunks) to Firestore.`);
-  } catch (err) {
-    console.warn('Failed to sync lesson file to Firestore cloud storage:', err);
-  }
+  // Background sync to Firestore cloud storage so other team members can access it
+  syncLocalBlobToFirestore(fileId, blob, file.name).catch((err) => {
+    console.warn('Background Firestore sync queued/warn:', err);
+  });
 
   return key;
 }
 
 const syncedKeys = new Set<string>();
 
-export async function syncLocalBlobToFirestore(id: string, blob: Blob | File): Promise<void> {
+export async function syncLocalBlobToFirestore(id: string, blob: Blob | File, originalName?: string): Promise<void> {
   if (!id || syncedKeys.has(id)) return;
   syncedKeys.add(id);
 
@@ -274,16 +281,20 @@ export async function getLocalVideoBlob(id: string): Promise<Blob | null> {
         const fullDataUrl = chunksData.map(c => c.data).join('');
         const downloadedBlob = dataUrlToBlob(fullDataUrl);
 
-        // Save into local IndexedDB for fast subsequent reads under candidate keys
-        try {
-          const dbInst = await getDB();
-          const transaction = dbInst.transaction(STORE_NAME, 'readwrite');
-          const store = transaction.objectStore(STORE_NAME);
-          store.put(downloadedBlob, id);
-          store.put(downloadedBlob, rawCleanId);
-        } catch {}
+        if (downloadedBlob && downloadedBlob.size > 0) {
+          // Save into local IndexedDB for fast subsequent reads under candidate keys
+          try {
+            const dbInst = await getDB();
+            const transaction = dbInst.transaction(STORE_NAME, 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
+            store.put(downloadedBlob, id);
+            if (rawCleanId !== id) {
+              store.put(downloadedBlob, rawCleanId);
+            }
+          } catch {}
 
-        return downloadedBlob;
+          return downloadedBlob;
+        }
       }
     }
   } catch (err) {
