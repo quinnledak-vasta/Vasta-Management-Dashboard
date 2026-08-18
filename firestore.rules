@@ -83,6 +83,8 @@ service cloud.firestore {
              (data.get('certifications', null) == null || data.certifications is list) &&
              (data.get('checkIns', null) == null || data.checkIns is list) &&
              (data.get('checkInAlertsSent', null) == null || data.checkInAlertsSent is list) &&
+             (data.get('annualReviews', null) == null || data.annualReviews is list) &&
+             (data.get('annualReviewAlertsSent', null) == null || data.annualReviewAlertsSent is list) &&
              (data.get('birthday', null) == null || data.birthday is string) &&
              (data.get('workAnniversary', null) == null || data.workAnniversary is string) &&
              (data.get('apparel', null) == null || data.apparel is list);

@@ -148,6 +148,7 @@ import {
   Resource,
   Certification,
   StaffCheckIn,
+  StaffAnnualReview,
   StaffApparelItem,
   StaffEvent,
   Course,
@@ -314,6 +315,7 @@ function AppContent() {
   const [isSubmittingHomework, setIsSubmittingHomework] = useState<boolean>(false);
   
   const [isNewCourseOpen, setIsNewCourseOpen] = useState(false);
+  const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [isNewChapterOpen, setIsNewChapterOpen] = useState(false);
   const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
   const [isNewLessonOpen, setIsNewLessonOpen] = useState(false);
@@ -1033,6 +1035,129 @@ function AppContent() {
     checkQuarterlyReviews();
   }, [user, trainers]);
 
+  // Automated Annual Review Alerts based on Work Anniversary timing (only sent to location managers)
+  useEffect(() => {
+    if (!user || trainers.length === 0) return;
+
+    const checkAnnualReviews = async () => {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+
+      for (const trainer of trainers) {
+        if (!trainer.workAnniversary || !trainer.location) continue;
+
+        const parts = trainer.workAnniversary.split('-');
+        if (parts.length < 2) continue;
+
+        const startYear = parts.length === 3 ? parseInt(parts[0], 10) : null;
+        const annivMonth = parts.length === 3 ? parseInt(parts[1], 10) : parseInt(parts[0], 10);
+        const annivDay = parts.length === 3 ? parseInt(parts[2], 10) : parseInt(parts[1], 10);
+
+        if (isNaN(annivMonth) || isNaN(annivDay)) continue;
+
+        const targetAnnivUtc = new Date(Date.UTC(currentYear, annivMonth - 1, annivDay));
+        const diffTime = targetAnnivUtc.getTime() - todayUtc.getTime();
+        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+        // Trigger alert when within 30 days before work anniversary or up to 30 days past
+        const isApproachingOrDue = diffDays <= 30 && diffDays >= -30;
+        if (!isApproachingOrDue) continue;
+
+        // Check if annual review for this year has already been completed / logged
+        const hasCompletedAnnualReview = (trainer.completedAnnualReviewYears || []).includes(currentYear) ||
+          (trainer.annualReviews || []).some(ar => ar.year === currentYear && ar.isCompleted !== false);
+        if (hasCompletedAnnualReview) continue;
+
+        const alertKey = `annual-review-${currentYear}`;
+        const alreadySent = (trainer.annualReviewAlertsSent || []).includes(alertKey);
+        if (alreadySent) continue;
+
+        // Find location managers (admins for the specific trainer's location)
+        const locationManagers = trainers.filter(t => 
+          t.role === 'admin' && t.location === trainer.location && t.email
+        );
+
+        if (locationManagers.length === 0) continue;
+
+        const yearsOfService = startYear ? Math.max(1, currentYear - startYear) : 1;
+        const getOrdinalSuffix = (num: number) => {
+          const j = num % 10, k = num % 100;
+          if (j === 1 && k !== 11) return `${num}st`;
+          if (j === 2 && k !== 12) return `${num}nd`;
+          if (j === 3 && k !== 13) return `${num}rd`;
+          return `${num}th`;
+        };
+        const milestoneStr = `${yearsOfService}${getOrdinalSuffix(yearsOfService)} Year Milestone`;
+        const annivDateFormatted = new Date(currentYear, annivMonth - 1, annivDay).toLocaleDateString(undefined, {
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric'
+        });
+
+        const updatedAlertsSent = [...(trainer.annualReviewAlertsSent || []), alertKey];
+
+        for (const manager of locationManagers) {
+          try {
+            await addDoc(collection(db, 'mail'), {
+              to: manager.email,
+              message: {
+                subject: `🎉 Annual Review Due: ${trainer.name} (${milestoneStr} - ${trainer.location})`,
+                html: `
+                  <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+                    <div style="background-color: #dc2626; color: white; padding: 16px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                      <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
+                        📋 Annual Staff Review Reminder
+                      </h2>
+                    </div>
+                    
+                    <p>Hi <strong>${manager.name}</strong>,</p>
+                    <p>This is a notification for location managers at <strong>${trainer.location}</strong>. Coach <strong>${trainer.name}</strong> has their work anniversary approaching.</p>
+                    
+                    <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                      <p style="margin: 0 0 10px 0;"><strong>Coach Name:</strong> ${trainer.name}</p>
+                      <p style="margin: 0 0 10px 0;"><strong>Location:</strong> ${trainer.location}</p>
+                      <p style="margin: 0 0 10px 0;"><strong>Work Anniversary:</strong> ${annivDateFormatted}</p>
+                      <p style="margin: 0 0 10px 0;"><strong>Milestone:</strong> ${milestoneStr}</p>
+                      <p style="margin: 0; font-size: 14px; font-weight: bold; color: ${diffDays < 0 ? '#dc2626' : '#d97706'};">
+                        Timing: ${diffDays === 0 ? 'Today is the anniversary!' : (diffDays > 0 ? `Approaching in ${diffDays} day(s)` : `Anniversary was ${Math.abs(diffDays)} day(s) ago`)}
+                      </p>
+                    </div>
+                    
+                    <p>Please conduct the <strong>${currentYear} Annual Performance Review</strong> with ${trainer.name} and check off the annual review completion in the Vasta Dashboard.</p>
+                    
+                    <div style="margin: 25px 0 15px 0; text-align: center;">
+                      <span style="display: inline-block; background-color: #dc2626; color: white; padding: 10px 22px; font-weight: bold; border-radius: 6px; text-decoration: none;">
+                        Open Dashboard &gt; Staff &gt; Staff Reviews &amp; Check-Ins
+                      </span>
+                    </div>
+
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                    <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">
+                      This alert was automatically sent to location managers for ${trainer.location} from the Vasta Dashboard.
+                    </p>
+                  </div>
+                `
+              }
+            });
+          } catch (e) {
+            console.error("Failed to send annual review email alert document", e);
+          }
+        }
+
+        try {
+          await updateDoc(doc(db, 'users', trainer.id), {
+            annualReviewAlertsSent: updatedAlertsSent
+          });
+        } catch (e) {
+          console.error("Failed to update annualReviewAlertsSent in Firestore", e);
+        }
+      }
+    };
+
+    checkAnnualReviews();
+  }, [user, trainers]);
+
   // Fetch Resources from Firestore
   useEffect(() => {
     if (!user) return;
@@ -1686,6 +1811,224 @@ function AppContent() {
     }
   };
 
+  const handleToggleAnnualReviewStatus = async (
+    trainerId: string,
+    year: number,
+    isCompleted: boolean,
+    completionDate?: string,
+    milestone?: string
+  ) => {
+    if (!user || !canManageCheckIns(user, trainerId)) {
+      toast.error("You are not authorized to update annual review status for this staff member");
+      return;
+    }
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const currentReviews = trainer.annualReviews || [];
+      const currentCompletedYears = trainer.completedAnnualReviewYears || [];
+
+      let updatedReviews: StaffAnnualReview[];
+      let updatedCompletedYears: number[];
+
+      if (isCompleted) {
+        const existingIndex = currentReviews.findIndex(r => r.year === year);
+        const completionEntry: StaffAnnualReview = {
+          id: existingIndex >= 0 ? currentReviews[existingIndex].id : `ar-${year}-${Date.now()}`,
+          year,
+          reviewDate: completionDate || new Date().toISOString().split('T')[0],
+          anniversaryMilestone: milestone || (existingIndex >= 0 ? currentReviews[existingIndex].anniversaryMilestone : `${year} Annual Review`),
+          isCompleted: true,
+          completedAt: new Date().toISOString(),
+          completedBy: user.id,
+          completedByName: user.name || user.email || 'Manager',
+          createdAt: existingIndex >= 0 ? currentReviews[existingIndex].createdAt : new Date().toISOString(),
+          createdBy: existingIndex >= 0 ? currentReviews[existingIndex].createdBy : user.id,
+          createdByName: existingIndex >= 0 ? currentReviews[existingIndex].createdByName : (user.name || 'Manager')
+        };
+
+        if (existingIndex >= 0) {
+          updatedReviews = currentReviews.map((r, i) => i === existingIndex ? { ...r, ...completionEntry } : r);
+        } else {
+          updatedReviews = [completionEntry, ...currentReviews];
+        }
+
+        updatedCompletedYears = Array.from(new Set([...currentCompletedYears, year]));
+        toast.success(`Annual review for ${year} marked as completed!`);
+      } else {
+        updatedReviews = currentReviews.map(r => r.year === year ? { ...r, isCompleted: false } : r);
+        updatedCompletedYears = currentCompletedYears.filter(y => y !== year);
+        toast.info(`Annual review for ${year} marked as pending.`);
+      }
+
+      await updateDoc(doc(db, 'users', trainerId), {
+        annualReviews: updatedReviews,
+        completedAnnualReviewYears: updatedCompletedYears
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleAddAnnualReview = async (
+    trainerId: string,
+    reviewData: {
+      year: number;
+      reviewDate: string;
+      anniversaryMilestone: string;
+      overallRating?: string;
+      accomplishmentsNotes?: string;
+      strengthsNotes?: string;
+      growthOpportunitiesNotes?: string;
+      goalSettingNotes?: string;
+      compensationReviewNotes?: string;
+    }
+  ) => {
+    if (!user || !canManageCheckIns(user, trainerId)) {
+      toast.error("You are not authorized to log an annual review for this staff member");
+      return;
+    }
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const newReview: StaffAnnualReview = {
+        id: `ar-${Date.now()}`,
+        year: reviewData.year,
+        reviewDate: reviewData.reviewDate,
+        anniversaryMilestone: reviewData.anniversaryMilestone,
+        overallRating: reviewData.overallRating || '',
+        accomplishmentsNotes: reviewData.accomplishmentsNotes || '',
+        strengthsNotes: reviewData.strengthsNotes || '',
+        growthOpportunitiesNotes: reviewData.growthOpportunitiesNotes || '',
+        goalSettingNotes: reviewData.goalSettingNotes || '',
+        compensationReviewNotes: reviewData.compensationReviewNotes || '',
+        createdAt: new Date().toISOString(),
+        createdBy: user.id,
+        createdByName: user.name || user.email || 'Manager'
+      };
+
+      const currentReviews = trainer.annualReviews || [];
+      const updatedReviews = [newReview, ...currentReviews];
+
+      await updateDoc(doc(db, 'users', trainerId), {
+        annualReviews: updatedReviews
+      });
+
+      toast.success(`Annual review for ${reviewData.year} logged successfully!`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleRemoveAnnualReview = async (trainerId: string, reviewId: string) => {
+    if (!user || !canManageCheckIns(user, trainerId)) {
+      toast.error("You are not authorized to delete annual reviews");
+      return;
+    }
+
+    if (!window.confirm("Are you sure you want to delete this annual review record?")) {
+      return;
+    }
+
+    try {
+      const trainer = trainers.find(t => t.id === trainerId);
+      if (!trainer) return;
+
+      const currentReviews = trainer.annualReviews || [];
+      const updatedReviews = currentReviews.filter(ar => ar.id !== reviewId);
+
+      await updateDoc(doc(db, 'users', trainerId), {
+        annualReviews: updatedReviews
+      });
+      toast.success("Annual review removed");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${trainerId}`);
+    }
+  };
+
+  const handleSendAnnualReviewAlert = async (trainerId: string) => {
+    if (!user) return;
+    const trainer = trainers.find(t => t.id === trainerId);
+    if (!trainer) {
+      toast.error("Trainer not found");
+      return;
+    }
+
+    if (!trainer.location) {
+      toast.error("Staff member does not have an assigned location");
+      return;
+    }
+
+    const locationManagers = trainers.filter(t => 
+      t.role === 'admin' && t.location === trainer.location && t.email
+    );
+
+    if (locationManagers.length === 0) {
+      toast.error(`No location managers found with an email address for ${trainer.location}`);
+      return;
+    }
+
+    const currentYear = new Date().getFullYear();
+    const annivFormatted = trainer.workAnniversary ? new Date(trainer.workAnniversary + 'T00:00:00').toLocaleDateString(undefined, {
+      month: 'long',
+      day: 'numeric'
+    }) : 'Anniversary Date';
+
+    let sentCount = 0;
+    for (const manager of locationManagers) {
+      try {
+        await addDoc(collection(db, 'mail'), {
+          to: manager.email,
+          message: {
+            subject: `📋 Annual Review Reminder: ${trainer.name} (${trainer.location})`,
+            html: `
+              <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px;">
+                <div style="background-color: #dc2626; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                  <h2 style="margin: 0; font-size: 18px; font-weight: bold;">
+                    📋 Annual Performance Review Notice
+                  </h2>
+                </div>
+                
+                <p>Hi <strong>${manager.name}</strong>,</p>
+                <p>This is a reminder for <strong>${trainer.location}</strong> management to conduct the annual performance review for coach <strong>${trainer.name}</strong> based on their work anniversary (${annivFormatted}).</p>
+                
+                <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 15px 0;">
+                  <p style="margin: 0 0 8px 0;"><strong>Staff Member:</strong> ${trainer.name}</p>
+                  <p style="margin: 0 0 8px 0;"><strong>Location:</strong> ${trainer.location}</p>
+                  <p style="margin: 0;"><strong>Work Anniversary:</strong> ${annivFormatted}</p>
+                </div>
+                
+                <p>Please log in to the Vasta Dashboard under <strong>Staff &gt; Staff Reviews &amp; Check-Ins</strong> to record the ${currentYear} Annual Review.</p>
+                <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                <p style="font-size: 12px; color: #94a3b8; margin: 0;">Sent from Vasta Management Dashboard</p>
+              </div>
+            `
+          }
+        });
+        sentCount++;
+      } catch (e) {
+        console.error("Failed to send manual annual review email alert", e);
+      }
+    }
+
+    // Mark alert key as sent
+    const alertKey = `annual-review-${currentYear}`;
+    const updatedAlertsSent = Array.from(new Set([...(trainer.annualReviewAlertsSent || []), alertKey]));
+    try {
+      await updateDoc(doc(db, 'users', trainer.id), {
+        annualReviewAlertsSent: updatedAlertsSent
+      });
+    } catch (e) {
+      console.error(e);
+    }
+
+    toast.success(`Annual review alert email successfully sent to ${sentCount} location manager(s) for ${trainer.location}!`);
+  };
+
   const handleRemoveMember = async (trainerId: string) => {
     if (!user || !isAdmin) return;
     if (trainerId === user.id) {
@@ -1952,25 +2295,26 @@ function AppContent() {
 
   const handleCreateChapter = async () => {
     if (!user || !canManageEducation) return;
-    const courseId = activeCourseId || newChapter.courseId;
+    const courseId = newChapter.courseId || activeCourseId || (courses.length > 0 ? courses[0].id : null);
     if (!courseId) {
       toast.error("Please select a course first");
       return;
     }
-    if (!newChapter.title) {
+    if (!newChapter.title || !newChapter.title.trim()) {
       toast.error("Please enter a chapter title");
       return;
     }
 
-    const titleToSave = newChapter.title;
-    const orderToSave = Number(newChapter.order) || 1;
+    const titleToSave = newChapter.title.trim();
+    const orderToSave = Number(newChapter.order) || (chapters.filter(c => c.courseId === courseId).length + 1);
 
+    // Dismiss modal and reset state immediately
     setIsNewChapterOpen(false);
     setEditingChapterId(null);
     setNewChapter({
       courseId: '',
       title: '',
-      order: (chapters.filter(c => c.courseId === courseId).length + 2),
+      order: 1,
     });
 
     try {
@@ -1990,16 +2334,17 @@ function AppContent() {
 
   const handleUpdateChapter = async () => {
     if (!user || !canManageEducation || !editingChapterId) return;
-    if (!newChapter.title) {
+    if (!newChapter.title || !newChapter.title.trim()) {
       toast.error("Please enter a chapter title");
       return;
     }
 
     const chapterIdToUpdate = editingChapterId;
     const courseId = newChapter.courseId || activeCourseId || (chapters.find(c => c.id === chapterIdToUpdate)?.courseId);
-    const titleToSave = newChapter.title;
+    const titleToSave = newChapter.title.trim();
     const orderToSave = Number(newChapter.order) || 1;
 
+    // Dismiss modal and reset state immediately
     setIsNewChapterOpen(false);
     setEditingChapterId(null);
     setNewChapter({
@@ -2034,26 +2379,26 @@ function AppContent() {
 
   const handleCreateLesson = async () => {
     if (!user || !canManageEducation) return;
-    const courseId = activeCourseId;
-    const chapterId = newLesson.chapterId;
-    if (!courseId || !chapterId) {
+    const courseId = newLesson.courseId || activeCourseId || (newLesson.chapterId ? chapters.find(c => c.id === newLesson.chapterId)?.courseId : null);
+    const chapterId = newLesson.chapterId || (chapters.filter(c => !courseId || c.courseId === courseId)[0]?.id);
+    if (!chapterId) {
       toast.error("Please select a chapter first");
       return;
     }
-    if (!newLesson.title) {
+    if (!newLesson.title || !newLesson.title.trim()) {
       toast.error("Please provide a lesson title");
       return;
     }
 
     const lessonData = {
-      courseId,
+      courseId: courseId || '',
       chapterId,
-      title: newLesson.title,
+      title: newLesson.title.trim(),
       description: newLesson.description || '',
       videoUrl: newLesson.videoUrl || '',
       textBody: newLesson.textBody || '',
       duration: Number(newLesson.duration) || 5,
-      order: Number(newLesson.order) || 1,
+      order: Number(newLesson.order) || (lessons.filter(l => l.chapterId === chapterId).length + 1),
       createdAt: new Date().toISOString(),
       hasHomework: !!newLesson.hasHomework,
       homeworkTitle: newLesson.homeworkTitle || '',
@@ -2062,6 +2407,7 @@ function AppContent() {
       homeworkFileType: newLesson.homeworkFileType || 'link',
     };
 
+    // Dismiss modal and reset state immediately
     setIsNewLessonOpen(false);
     setEditingLessonId(null);
     setNewLesson({
@@ -2072,7 +2418,7 @@ function AppContent() {
       videoUrl: '',
       textBody: '',
       duration: 5,
-      order: (lessons.filter(l => l.chapterId === chapterId).length + 2),
+      order: 1,
       hasHomework: false,
       homeworkTitle: '',
       homeworkFileUrl: '',
@@ -2081,7 +2427,8 @@ function AppContent() {
     });
 
     try {
-      await addDoc(collection(db, 'lessons'), lessonData);
+      const docRef = await addDoc(collection(db, 'lessons'), lessonData);
+      setActiveLessonId(docRef.id);
       toast.success("Lesson created successfully");
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'lessons');
@@ -2198,7 +2545,7 @@ function AppContent() {
 
   const handleUpdateLesson = async () => {
     if (!user || !canManageEducation || !editingLessonId) return;
-    if (!newLesson.title) {
+    if (!newLesson.title || !newLesson.title.trim()) {
       toast.error("Please provide a lesson title");
       return;
     }
@@ -2208,7 +2555,7 @@ function AppContent() {
     const targetCourseId = targetChapter ? targetChapter.courseId : (newLesson.courseId || activeCourseId);
 
     const updateFields = {
-      title: newLesson.title,
+      title: newLesson.title.trim(),
       description: newLesson.description || '',
       videoUrl: newLesson.videoUrl || '',
       textBody: newLesson.textBody || '',
@@ -2223,6 +2570,7 @@ function AppContent() {
       homeworkFileType: newLesson.homeworkFileType || 'link',
     };
 
+    // Dismiss modal and reset state immediately
     setIsNewLessonOpen(false);
     setEditingLessonId(null);
     setNewLesson({
@@ -2898,7 +3246,16 @@ function AppContent() {
                 {isOnboardingAdminMode && canManageEducation && (
                   <div className="flex gap-2">
                     <Button
-                      onClick={() => setIsNewCourseOpen(true)}
+                      onClick={() => {
+                        setEditingCourseId(null);
+                        setNewCourse({
+                          title: '',
+                          description: '',
+                          thumbnailUrl: '',
+                          order: courses.length + 1,
+                        });
+                        setIsNewCourseOpen(true);
+                      }}
                       className="bg-red-600 hover:bg-red-700 text-xs font-semibold"
                     >
                       <Plus className="w-3.5 h-3.5 mr-1" /> Course
@@ -2909,6 +3266,13 @@ function AppContent() {
                           toast.error("Please create a course first");
                           return;
                         }
+                        const targetCourseId = activeCourseId || courses[0]?.id || '';
+                        setEditingChapterId(null);
+                        setNewChapter({
+                          courseId: targetCourseId,
+                          title: '',
+                          order: (chapters.filter(c => c.courseId === targetCourseId).length + 1),
+                        });
                         setIsNewChapterOpen(true);
                       }}
                       variant="outline"
@@ -2922,6 +3286,26 @@ function AppContent() {
                           toast.error("Please create a chapter first");
                           return;
                         }
+                        const targetCourseId = activeCourseId || courses[0]?.id || '';
+                        const availChapters = chapters.filter(c => !targetCourseId || c.courseId === targetCourseId);
+                        const targetChapterId = availChapters[0]?.id || chapters[0]?.id || '';
+                        setEditingLessonId(null);
+                        setVideoSourceType('link');
+                        setNewLesson({
+                          courseId: targetCourseId,
+                          chapterId: targetChapterId,
+                          title: '',
+                          description: '',
+                          videoUrl: '',
+                          textBody: '',
+                          duration: 5,
+                          order: (lessons.filter(l => l.chapterId === targetChapterId).length + 1),
+                          hasHomework: false,
+                          homeworkTitle: '',
+                          homeworkFileUrl: '',
+                          homeworkFileName: '',
+                          homeworkFileType: 'link',
+                        });
                         setIsNewLessonOpen(true);
                       }}
                       variant="outline"
@@ -4247,10 +4631,10 @@ function AppContent() {
                                 className={`gap-2 border-slate-200 font-medium ${expandedCheckInTrainerId === trainer.id ? 'bg-red-50 text-red-750 border-red-100' : ''}`}
                               >
                                 <ClipboardList className="w-4 h-4 text-red-650" />
-                                <span>{expandedCheckInTrainerId === trainer.id ? 'Hide Check-Ins' : 'Staff Check-Ins'}</span>
-                                {trainer.checkIns && trainer.checkIns.length > 0 && (
+                                <span>{expandedCheckInTrainerId === trainer.id ? 'Hide Reviews' : 'Staff Reviews & Check-Ins'}</span>
+                                {(((trainer.checkIns?.length || 0) + (trainer.annualReviews?.length || 0)) > 0) && (
                                   <Badge className="bg-red-600 text-white hover:bg-red-700 text-[10px] px-1.5 py-0 h-4 min-w-4 flex items-center justify-center rounded-full">
-                                    {trainer.checkIns.length}
+                                    {(trainer.checkIns?.length || 0) + (trainer.annualReviews?.length || 0)}
                                   </Badge>
                                 )}
                               </Button>
@@ -4785,6 +5169,10 @@ function AppContent() {
                                 user={user}
                                 onAddCheckIn={handleAddCheckIn}
                                 onRemoveCheckIn={handleRemoveCheckIn}
+                                onToggleAnnualReviewStatus={handleToggleAnnualReviewStatus}
+                                onAddAnnualReview={handleAddAnnualReview}
+                                onRemoveAnnualReview={handleRemoveAnnualReview}
+                                onSendAnnualReviewAlert={handleSendAnnualReviewAlert}
                               />
                             </motion.div>
                           )}
@@ -6165,10 +6553,30 @@ function AppContent() {
                     )}
 
                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-                      <div className="bg-slate-50 border-b border-slate-200 p-4">
+                      <div className="bg-slate-50 border-b border-slate-200 p-3.5 flex items-center justify-between">
                         <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest font-mono flex items-center gap-1.5">
-                          <BookOpen className="w-3.5 h-3.5 text-red-500" /> Syllabus / Course outline
+                          <BookOpen className="w-3.5 h-3.5 text-red-500" /> Syllabus / Outline
                         </h4>
+                        {canManageEducation && (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            className="h-6 text-[11px] font-semibold border-slate-200 text-slate-700 hover:bg-red-50 hover:text-red-700 hover:border-red-200 flex items-center gap-1 px-2"
+                            onClick={() => {
+                              const targetCourseId = activeCourseId || currentCourse.id;
+                              setEditingChapterId(null);
+                              setNewChapter({
+                                courseId: targetCourseId,
+                                title: '',
+                                order: courseChapters.length + 1,
+                              });
+                              setIsNewChapterOpen(true);
+                            }}
+                            title="Add a new chapter to this course"
+                          >
+                            <Plus className="w-3 h-3 text-red-600" /> Chapter
+                          </Button>
+                        )}
                       </div>
 
                       <div className="divide-y divide-slate-100 max-h-[60vh] overflow-y-auto custom-scrollbar">
@@ -6176,16 +6584,45 @@ function AppContent() {
                           const chapterLessons = lessons.filter(l => l.chapterId === chapter.id).sort((a,b) => a.order - b.order);
                           return (
                             <div key={chapter.id} className="p-3 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <h5 className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <h5 className="text-xs font-bold text-slate-800 flex items-center gap-1.5 truncate">
                                   <span>{chapter.title}</span>
                                 </h5>
-                                {isOnboardingAdminMode && canManageEducation && (
-                                  <div className="flex gap-1">
+                                {canManageEducation && (
+                                  <div className="flex items-center gap-1 shrink-0">
                                     <Button 
                                       variant="ghost" 
-                                      size="sm" 
-                                      className="h-6 w-6 p-0 text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+                                      size="xs" 
+                                      className="h-6 px-1.5 text-[10px] font-semibold text-slate-600 hover:text-red-700 hover:bg-red-50 flex items-center gap-0.5"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditingLessonId(null);
+                                        setVideoSourceType('link');
+                                        setNewLesson({
+                                          courseId: chapter.courseId || activeCourseId || currentCourse.id,
+                                          chapterId: chapter.id,
+                                          title: '',
+                                          description: '',
+                                          videoUrl: '',
+                                          textBody: '',
+                                          duration: 5,
+                                          order: chapterLessons.length + 1,
+                                          hasHomework: false,
+                                          homeworkTitle: '',
+                                          homeworkFileUrl: '',
+                                          homeworkFileName: '',
+                                          homeworkFileType: 'link',
+                                        });
+                                        setIsNewLessonOpen(true);
+                                      }}
+                                      title="Add lesson to this chapter"
+                                    >
+                                      <Plus className="w-3 h-3 text-red-500" /> Lesson
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="xs" 
+                                      className="h-6 w-6 p-0 text-slate-500 hover:text-slate-900 hover:bg-slate-100"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setNewChapter({
@@ -6196,14 +6633,14 @@ function AppContent() {
                                         setEditingChapterId(chapter.id);
                                         setIsNewChapterOpen(true);
                                       }}
-                                      title="Edit Chapter"
+                                      title="Edit Chapter title & order"
                                     >
                                       <Edit2 className="w-3 h-3" />
                                     </Button>
                                     <Button 
                                       variant="ghost" 
-                                      size="sm" 
-                                      className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                      size="xs" 
+                                      className="h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleDeleteChapter(chapter.id);
@@ -6264,14 +6701,16 @@ function AppContent() {
                                         </div>
                                       </div>
 
-                                      {isOnboardingAdminMode && canManageEducation && (
-                                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      {canManageEducation && (
+                                        <div className="flex gap-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
                                           <Button 
                                             variant="ghost" 
-                                            size="sm" 
-                                            className="h-6 w-6 p-0 text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+                                            size="xs" 
+                                            className="h-6 w-6 p-0 text-slate-500 hover:text-slate-900 hover:bg-slate-100"
                                             onClick={(e) => {
                                               e.stopPropagation();
+                                              const isUploadedFile = (lesson.videoUrl || '').startsWith('localfile_') || (lesson.videoUrl || '').startsWith('firestorefile_');
+                                              setVideoSourceType(isUploadedFile ? 'file' : 'link');
                                               setNewLesson({
                                                 courseId: lesson.courseId,
                                                 chapterId: lesson.chapterId,
@@ -6290,17 +6729,19 @@ function AppContent() {
                                               setEditingLessonId(lesson.id);
                                               setIsNewLessonOpen(true);
                                             }}
+                                            title="Edit Lesson"
                                           >
                                             <Edit2 className="w-3 h-3" />
                                           </Button>
                                           <Button 
                                             variant="ghost" 
-                                            size="sm" 
+                                            size="xs" 
                                             className="h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
                                             onClick={(e) => {
                                               e.stopPropagation();
                                               handleDeleteLesson(lesson.id);
                                             }}
+                                            title="Delete Lesson"
                                           >
                                             <Trash2 className="w-3 h-3" />
                                           </Button>
@@ -6318,7 +6759,7 @@ function AppContent() {
                         })}
                         {courseChapters.length === 0 && (
                           <div className="p-8 text-center">
-                            <p className="text-xs text-slate-400 italic">No chapters created yet. Open builder mode to create chapters and lessons.</p>
+                            <p className="text-xs text-slate-400 italic">No chapters created yet. Click "+ Chapter" above to create one.</p>
                           </div>
                         )}
                       </div>
@@ -6461,12 +6902,14 @@ function AppContent() {
                               )}
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
-                              {isOnboardingAdminMode && canManageEducation && (
+                              {canManageEducation && (
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  className="h-6 text-xs font-semibold text-slate-600 hover:text-slate-900 border-slate-200 flex items-center gap-1 px-2"
+                                  className="h-7 text-xs font-semibold text-slate-700 hover:text-red-700 hover:bg-red-50 border-slate-200 flex items-center gap-1.5 px-2.5 shadow-2xs"
                                   onClick={() => {
+                                    const isUploadedFile = (activeLesson.videoUrl || '').startsWith('localfile_') || (activeLesson.videoUrl || '').startsWith('firestorefile_');
+                                    setVideoSourceType(isUploadedFile ? 'file' : 'link');
                                     setNewLesson({
                                       courseId: activeLesson.courseId,
                                       chapterId: activeLesson.chapterId,
@@ -6487,7 +6930,7 @@ function AppContent() {
                                   }}
                                   title="Edit active lesson"
                                 >
-                                  <Edit2 className="w-3 h-3" /> Edit
+                                  <Edit2 className="w-3.5 h-3.5 text-slate-500" /> Edit Lesson
                                 </Button>
                               )}
                               <Badge variant="outline" className="text-xs font-semibold px-2 py-0.5 bg-slate-50 text-slate-600 flex items-center gap-1">
@@ -6889,12 +7332,12 @@ function AppContent() {
                           <div className="grid gap-1.5">
                             <Label htmlFor="chapter-course">Course</Label>
                             <Select 
-                              value={newChapter.courseId || activeCourseId || ''} 
+                              value={newChapter.courseId || activeCourseId || (courses[0]?.id || '')} 
                               onValueChange={(val) => setNewChapter({ ...newChapter, courseId: val })}
                             >
                               <SelectTrigger>
-                                <span className={`flex flex-1 text-left truncate text-sm ${!(newChapter.courseId || activeCourseId) ? 'text-slate-400' : 'text-slate-900'}`}>
-                                  {courses.find(c => c.id === (newChapter.courseId || activeCourseId))?.title || "Choose a course..."}
+                                <span className={`flex flex-1 text-left truncate text-sm ${!(newChapter.courseId || activeCourseId || courses[0]?.id) ? 'text-slate-400' : 'text-slate-900'}`}>
+                                  {courses.find(c => c.id === (newChapter.courseId || activeCourseId || courses[0]?.id))?.title || "Choose a course..."}
                                 </span>
                               </SelectTrigger>
                               <SelectContent>
@@ -6910,6 +7353,16 @@ function AppContent() {
                               id="chapter-title"
                               value={newChapter.title}
                               onChange={(e) => setNewChapter({ ...newChapter, title: e.target.value })}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  if (editingChapterId) {
+                                    handleUpdateChapter();
+                                  } else {
+                                    handleCreateChapter();
+                                  }
+                                }
+                              }}
                               placeholder="e.g. Chapter 1: Gym Etiquette & Cleanliness"
                             />
                           </div>
@@ -6925,13 +7378,20 @@ function AppContent() {
                           </div>
                         </div>
                         <DialogFooter>
-                          <Button variant="outline" onClick={() => {
-                            setEditingChapterId(null);
-                            setIsNewChapterOpen(false);
-                          }}>Cancel</Button>
                           <Button 
+                            type="button"
+                            variant="outline" 
+                            onClick={() => {
+                              setEditingChapterId(null);
+                              setIsNewChapterOpen(false);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                          <Button 
+                            type="button"
                             onClick={editingChapterId ? handleUpdateChapter : handleCreateChapter} 
-                            className="bg-red-600 hover:bg-red-700"
+                            className="bg-red-600 hover:bg-red-700 font-semibold"
                           >
                             {editingChapterId ? 'Save Changes' : 'Create Chapter'}
                           </Button>
@@ -7373,13 +7833,20 @@ function AppContent() {
                           </div>
                         </div>
                         <DialogFooter>
-                          <Button variant="outline" onClick={() => {
-                            setEditingLessonId(null);
-                            setIsNewLessonOpen(false);
-                          }}>Cancel</Button>
                           <Button 
+                            type="button"
+                            variant="outline" 
+                            onClick={() => {
+                              setEditingLessonId(null);
+                              setIsNewLessonOpen(false);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                          <Button 
+                            type="button"
                             onClick={editingLessonId ? handleUpdateLesson : handleCreateLesson}
-                            className="bg-red-600 hover:bg-red-700"
+                            className="bg-red-600 hover:bg-red-700 font-semibold"
                           >
                             {editingLessonId ? 'Save Changes' : 'Add Lesson'}
                           </Button>

@@ -91,6 +91,27 @@ export interface StaffApparelItem {
   notes?: string;
 }
 
+export interface StaffAnnualReview {
+  id: string;
+  year: number;
+  reviewDate?: string;
+  anniversaryMilestone?: string;
+  overallRating?: string;
+  accomplishmentsNotes?: string;
+  strengthsNotes?: string;
+  growthOpportunitiesNotes?: string;
+  goalSettingNotes?: string;
+  compensationReviewNotes?: string;
+  isCompleted?: boolean;
+  completedAt?: string;
+  completedBy?: string;
+  completedByName?: string;
+  notes?: string;
+  createdAt: string;
+  createdBy: string;
+  createdByName: string;
+}
+
 export interface Trainer {
   id: string;
   name: string;
@@ -100,10 +121,13 @@ export interface Trainer {
   photoURL?: string;
   certifications?: Certification[];
   checkIns?: StaffCheckIn[];
+  annualReviews?: StaffAnnualReview[];
+  completedAnnualReviewYears?: number[];
   birthday?: string;
   workAnniversary?: string;
   apparel?: StaffApparelItem[];
   checkInAlertsSent?: string[];
+  annualReviewAlertsSent?: string[];
 }
 
 export interface Alert {

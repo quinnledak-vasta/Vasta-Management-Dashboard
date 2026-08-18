@@ -40,7 +40,9 @@
         "birthday": { "type": "string" },
         "workAnniversary": { "type": "string" },
         "apparel": { "type": "array" },
-        "checkInAlertsSent": { "type": "array" }
+        "checkInAlertsSent": { "type": "array" },
+        "annualReviews": { "type": "array" },
+        "annualReviewAlertsSent": { "type": "array" }
       },
       "required": ["id", "name", "email", "role"]
     },
