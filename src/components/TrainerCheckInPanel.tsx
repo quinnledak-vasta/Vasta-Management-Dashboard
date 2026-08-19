@@ -101,7 +101,7 @@ export function TrainerCheckInPanel({
 
   const currentYear = new Date().getFullYear();
 
-  // Calculate anniversary details
+  // Calculate anniversary and 3-month-prior due date details
   const anniversaryDetails = (() => {
     if (!trainer.workAnniversary) return null;
     const parts = trainer.workAnniversary.split('-');
@@ -114,11 +114,6 @@ export function TrainerCheckInPanel({
 
     const today = new Date();
     const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
-    const targetAnnivUtc = new Date(Date.UTC(currentYear, annivMonth - 1, annivDay));
-    const diffTime = targetAnnivUtc.getTime() - todayUtc.getTime();
-    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
-    
-    const yearsOfService = startYear ? Math.max(1, currentYear - startYear) : 1;
     
     const getOrdinalSuffix = (num: number) => {
       const j = num % 10, k = num % 100;
@@ -128,27 +123,60 @@ export function TrainerCheckInPanel({
       return `${num}th`;
     };
 
-    const targetDateFormatted = new Date(currentYear, annivMonth - 1, annivDay).toLocaleDateString(undefined, {
-      month: 'long',
-      day: 'numeric'
-    });
+    const getCycleDetails = (year: number) => {
+      const annivUtc = new Date(Date.UTC(year, annivMonth - 1, annivDay));
+      // Due date is 3 months prior to the anniversary
+      const dueUtc = new Date(Date.UTC(year, annivMonth - 1 - 3, annivDay));
+      const diffTimeToDue = dueUtc.getTime() - todayUtc.getTime();
+      const diffDaysToDue = Math.round(diffTimeToDue / (1000 * 60 * 60 * 24));
+      const diffTimeToAnniv = annivUtc.getTime() - todayUtc.getTime();
+      const diffDaysToAnniv = Math.round(diffTimeToAnniv / (1000 * 60 * 60 * 24));
+      const yearsOfService = startYear ? Math.max(1, year - startYear) : 1;
+      return {
+        year,
+        diffDaysToDue,
+        diffDaysToAnniv,
+        yearsOfService,
+        annivDateFormatted: new Date(year, annivMonth - 1, annivDay).toLocaleDateString(undefined, {
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric'
+        }),
+        dueDateFormatted: new Date(year, annivMonth - 1 - 3, annivDay).toLocaleDateString(undefined, {
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric'
+        })
+      };
+    };
 
-    const isUpcomingSoon = diffDays >= 0 && diffDays <= 30;
-    const isPastDue = diffDays < 0 && diffDays >= -60;
+    const cycleCurrent = getCycleDetails(currentYear);
+    const cycleNext = getCycleDetails(currentYear + 1);
+
+    const isCurrentYearDone = (trainer.completedAnnualReviewYears || []).includes(currentYear) ||
+      (trainer.annualReviews || []).some(r => r.year === currentYear && r.isCompleted !== false);
+
+    // If current year review is already completed or its due date was more than 60 days in the past, focus on next cycle
+    const activeCycle = (isCurrentYearDone || cycleCurrent.diffDaysToDue < -60) ? cycleNext : cycleCurrent;
+
+    const isUpcomingDue = activeCycle.diffDaysToDue >= 0 && activeCycle.diffDaysToDue <= 30;
+    const isPastDue = activeCycle.diffDaysToDue < 0;
 
     return {
       startYear,
-      yearsOfService,
-      milestoneStr: `${yearsOfService}${getOrdinalSuffix(yearsOfService)} Year`,
-      targetDateFormatted,
-      diffDays,
-      isUpcomingSoon,
+      activeYear: activeCycle.year,
+      yearsOfService: activeCycle.yearsOfService,
+      annivDateFormatted: activeCycle.annivDateFormatted,
+      dueDateFormatted: activeCycle.dueDateFormatted,
+      diffDaysToDue: activeCycle.diffDaysToDue,
+      diffDaysToAnniv: activeCycle.diffDaysToAnniv,
+      isUpcomingDue,
       isPastDue,
       hireDateFormatted: startYear ? new Date(startYear, annivMonth - 1, annivDay).toLocaleDateString(undefined, {
         month: 'long',
         day: 'numeric',
         year: 'numeric'
-      }) : targetDateFormatted
+      }) : activeCycle.annivDateFormatted
     };
   })();
 
@@ -190,7 +218,7 @@ export function TrainerCheckInPanel({
   const handleToggleYear = async (year: number, isChecked: boolean, milestoneText?: string) => {
     setUpdatingYear(year);
     try {
-      const milestone = milestoneText || (anniversaryDetails ? anniversaryDetails.milestoneStr : `${year} Annual Review`);
+      const milestone = milestoneText || `${year} Annual Review`;
       if (onToggleAnnualReviewStatus) {
         await onToggleAnnualReviewStatus(trainer.id, year, isChecked, new Date().toISOString().split('T')[0], milestone);
       } else if (onAddAnnualReview) {
@@ -239,16 +267,16 @@ export function TrainerCheckInPanel({
 
   return (
     <div className="p-6 space-y-6 bg-slate-50/40">
-      {/* Top Banner: Work Anniversary & Annual Review Milestone Status */}
+      {/* Top Banner: Work Anniversary & Annual Review Status */}
       {anniversaryDetails && (
         <div className={`p-4 rounded-xl border flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${
-          !isCurrentYearReviewPerformed && (anniversaryDetails.isUpcomingSoon || anniversaryDetails.isPastDue)
+          !isCurrentYearReviewPerformed && (anniversaryDetails.isUpcomingDue || anniversaryDetails.isPastDue)
             ? 'bg-amber-50/60 border-amber-200 shadow-sm'
             : 'bg-white border-slate-200'
         }`}>
           <div className="flex items-start gap-3">
             <div className={`p-2.5 rounded-lg shrink-0 ${
-              !isCurrentYearReviewPerformed && (anniversaryDetails.isUpcomingSoon || anniversaryDetails.isPastDue)
+              !isCurrentYearReviewPerformed && (anniversaryDetails.isUpcomingDue || anniversaryDetails.isPastDue)
                 ? 'bg-amber-100 text-amber-800' 
                 : 'bg-slate-100 text-slate-700'
             }`}>
@@ -257,11 +285,8 @@ export function TrainerCheckInPanel({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h5 className="font-bold text-slate-900 text-sm">
-                  Work Anniversary & Annual Review Timing
+                  Annual Review Timing (Due 3 Months Prior to Anniversary)
                 </h5>
-                <Badge className="bg-emerald-700 text-white font-bold text-[10px] px-2 py-0.5">
-                  {anniversaryDetails.milestoneStr} Milestone
-                </Badge>
                 {isCurrentYearReviewPerformed ? (
                   <Badge className="bg-emerald-600 text-white font-semibold text-[10px] px-2 py-0.5 flex items-center gap-1">
                     <CheckCircle2 className="w-3 h-3" />
@@ -269,21 +294,22 @@ export function TrainerCheckInPanel({
                   </Badge>
                 ) : (
                   <>
-                    {anniversaryDetails.isUpcomingSoon && (
+                    {anniversaryDetails.isUpcomingDue && (
                       <Badge className="bg-amber-600 text-white font-semibold text-[10px] px-2 py-0.5">
-                        Approaching in {anniversaryDetails.diffDays} day{anniversaryDetails.diffDays === 1 ? '' : 's'}
+                        Due in {anniversaryDetails.diffDaysToDue} day{anniversaryDetails.diffDaysToDue === 1 ? '' : 's'}
                       </Badge>
                     )}
                     {anniversaryDetails.isPastDue && (
                       <Badge className="bg-red-600 text-white font-semibold text-[10px] px-2 py-0.5">
-                        Anniversary Passed ({Math.abs(anniversaryDetails.diffDays)} days ago)
+                        Review Past Due ({Math.abs(anniversaryDetails.diffDaysToDue)} days ago)
                       </Badge>
                     )}
                   </>
                 )}
               </div>
               <p className="text-xs text-slate-600 mt-1">
-                Hire Date: <strong>{anniversaryDetails.hireDateFormatted}</strong> • Annual Review Target: <strong>{anniversaryDetails.targetDateFormatted} ({currentYear})</strong>
+                Work Anniversary: <strong>{anniversaryDetails.annivDateFormatted}</strong> • 
+                <span className="text-red-700 font-semibold ml-1">Review Due Date (3 Mo Prior): <strong>{anniversaryDetails.dueDateFormatted}</strong></span>
                 {trainer.location && <span> • Location: <strong className="text-slate-800">{trainer.location}</strong></span>}
               </p>
             </div>
@@ -664,15 +690,18 @@ export function TrainerCheckInPanel({
                   Annual Performance Review Status
                 </h4>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Annual reviews are conducted outside the app. Check the box below once the review for the year has been performed.
+                  Annual reviews are due <strong>3 months prior to the work anniversary</strong>. Check the box below once the review for the year has been performed.
                 </p>
               </div>
 
               {anniversaryDetails && (
-                <div className="flex items-center gap-2 shrink-0">
-                  <Badge variant="outline" className="text-xs font-medium border-slate-200 bg-slate-50 text-slate-700 py-1 px-2.5">
-                    <Calendar className="w-3.5 h-3.5 mr-1 text-slate-500" />
-                    Target: {anniversaryDetails.targetDateFormatted} ({currentYear})
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <Badge variant="outline" className="text-xs font-semibold border-red-200 bg-red-50 text-red-700 py-1 px-2.5">
+                    <Calendar className="w-3.5 h-3.5 mr-1 text-red-600" />
+                    Due Date (3 Mo Prior): {anniversaryDetails.dueDateFormatted}
+                  </Badge>
+                  <Badge variant="outline" className="text-xs font-medium border-slate-200 bg-slate-50 text-slate-600 py-1 px-2.5">
+                    Anniversary: {anniversaryDetails.annivDateFormatted}
                   </Badge>
                 </div>
               )}
@@ -682,7 +711,7 @@ export function TrainerCheckInPanel({
             <div className={`p-5 rounded-xl border transition-all duration-200 ${
               isCurrentYearReviewPerformed
                 ? 'bg-emerald-50/50 border-emerald-200'
-                : (anniversaryDetails?.isUpcomingSoon || anniversaryDetails?.isPastDue)
+                : (anniversaryDetails?.isUpcomingDue || anniversaryDetails?.isPastDue)
                   ? 'bg-amber-50/40 border-amber-200'
                   : 'bg-slate-50 border-slate-200'
             }`}>
@@ -694,7 +723,7 @@ export function TrainerCheckInPanel({
                       checked={isCurrentYearReviewPerformed}
                       disabled={updatingYear === currentYear}
                       onCheckedChange={(checked) => {
-                        handleToggleYear(currentYear, !!checked, anniversaryDetails?.milestoneStr);
+                        handleToggleYear(currentYear, !!checked);
                       }}
                       className="w-5 h-5 border-2 border-slate-400 data-[state=checked]:bg-emerald-600 data-[state=checked]:border-emerald-600 rounded"
                     />
@@ -706,11 +735,6 @@ export function TrainerCheckInPanel({
                       className="font-bold text-slate-900 text-sm cursor-pointer flex flex-wrap items-center gap-2"
                     >
                       <span>{currentYear} Annual Review Performed</span>
-                      {anniversaryDetails && (
-                        <Badge className="bg-slate-800 text-white font-bold text-[10px] px-2 py-0.2">
-                          {anniversaryDetails.milestoneStr} Milestone
-                        </Badge>
-                      )}
                     </label>
                     <p className="text-xs text-slate-600 leading-relaxed">
                       {isCurrentYearReviewPerformed ? (
@@ -727,7 +751,7 @@ export function TrainerCheckInPanel({
                         </span>
                       ) : (
                         <span className="text-slate-500">
-                          Review is pending for {currentYear}. Check this box once you have conducted the annual review with {trainer.name}.
+                          Review is pending for {currentYear}. Due date was/is <strong>{anniversaryDetails?.dueDateFormatted || '3 months prior to anniversary'}</strong>. Check this box once you have conducted the review with {trainer.name}.
                         </span>
                       )}
                     </p>
@@ -795,11 +819,6 @@ export function TrainerCheckInPanel({
                               <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-slate-300 bg-slate-100 text-slate-700 font-semibold">
                                 Current Year
                               </Badge>
-                            )}
-                            {revData?.anniversaryMilestone && (
-                              <span className="text-[10px] text-slate-400 font-normal">
-                                ({revData.anniversaryMilestone})
-                              </span>
                             )}
                           </label>
                           <p className="text-[11px] text-slate-500">
@@ -870,7 +889,7 @@ export function TrainerCheckInPanel({
               <div>
                 <p className="font-semibold text-slate-800">Automated Annual Review Alert Reminders</p>
                 <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
-                  Email reminder alerts are automatically sent to <strong>{trainer.location || 'assigned location'}</strong> location managers 30 days before work anniversaries if the annual review for that year has not yet been performed. Once you check off the review above, no further reminders for {currentYear} will be dispatched.
+                  Email reminder alerts are automatically sent to <strong>{trainer.location || 'assigned location'}</strong> location managers 30 days prior to the <strong>Review Due Date (which is 3 months prior to the employee's work anniversary)</strong> if the annual review has not yet been marked as completed. Once you check off the review above, no further automated reminders will be dispatched.
                 </p>
               </div>
             </div>

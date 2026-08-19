@@ -1056,101 +1056,123 @@ function AppContent() {
 
         if (isNaN(annivMonth) || isNaN(annivDay)) continue;
 
-        const targetAnnivUtc = new Date(Date.UTC(currentYear, annivMonth - 1, annivDay));
-        const diffTime = targetAnnivUtc.getTime() - todayUtc.getTime();
-        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+        // Check both currentYear and currentYear + 1 cycles
+        for (const targetYear of [currentYear, currentYear + 1]) {
+          const annivUtc = new Date(Date.UTC(targetYear, annivMonth - 1, annivDay));
+          // Review due date is strictly 3 months prior to the work anniversary
+          const dueUtc = new Date(Date.UTC(targetYear, annivMonth - 1 - 3, annivDay));
+          
+          const diffTimeToDue = dueUtc.getTime() - todayUtc.getTime();
+          const diffDaysToDueDate = Math.round(diffTimeToDue / (1000 * 60 * 60 * 24));
 
-        // Trigger alert when within 30 days before work anniversary or up to 30 days past
-        const isApproachingOrDue = diffDays <= 30 && diffDays >= -30;
-        if (!isApproachingOrDue) continue;
+          // Trigger alert when within 30 days prior to the 3-month-prior due date, up to 60 days past due
+          const isApproachingOrDue = diffDaysToDueDate <= 30 && diffDaysToDueDate >= -60;
+          if (!isApproachingOrDue) continue;
 
-        // Check if annual review for this year has already been completed / logged
-        const hasCompletedAnnualReview = (trainer.completedAnnualReviewYears || []).includes(currentYear) ||
-          (trainer.annualReviews || []).some(ar => ar.year === currentYear && ar.isCompleted !== false);
-        if (hasCompletedAnnualReview) continue;
+          // Check if annual review for this target year milestone has already been completed
+          const hasCompletedAnnualReview = (trainer.completedAnnualReviewYears || []).includes(targetYear) ||
+            (trainer.annualReviews || []).some(ar => ar.year === targetYear && ar.isCompleted !== false);
+          if (hasCompletedAnnualReview) continue;
 
-        const alertKey = `annual-review-${currentYear}`;
-        const alreadySent = (trainer.annualReviewAlertsSent || []).includes(alertKey);
-        if (alreadySent) continue;
+          const alertKey = `annual-review-${targetYear}`;
+          const alreadySent = (trainer.annualReviewAlertsSent || []).includes(alertKey);
+          if (alreadySent) continue;
 
-        // Find location managers (admins for the specific trainer's location)
-        const locationManagers = trainers.filter(t => 
-          t.role === 'admin' && t.location === trainer.location && t.email
-        );
+          // Find location managers (admins for the specific trainer's location)
+          const locationManagers = trainers.filter(t => 
+            t.role === 'admin' && t.location === trainer.location && t.email
+          );
 
-        if (locationManagers.length === 0) continue;
+          if (locationManagers.length === 0) continue;
 
-        const yearsOfService = startYear ? Math.max(1, currentYear - startYear) : 1;
-        const getOrdinalSuffix = (num: number) => {
-          const j = num % 10, k = num % 100;
-          if (j === 1 && k !== 11) return `${num}st`;
-          if (j === 2 && k !== 12) return `${num}nd`;
-          if (j === 3 && k !== 13) return `${num}rd`;
-          return `${num}th`;
-        };
-        const milestoneStr = `${yearsOfService}${getOrdinalSuffix(yearsOfService)} Year Milestone`;
-        const annivDateFormatted = new Date(currentYear, annivMonth - 1, annivDay).toLocaleDateString(undefined, {
-          month: 'long',
-          day: 'numeric',
-          year: 'numeric'
-        });
+          const yearsOfService = (startYear && startYear >= 1990 && targetYear >= startYear) ? Math.max(1, targetYear - startYear) : null;
+          const getOrdinalSuffix = (num: number) => {
+            const j = num % 10, k = num % 100;
+            if (j === 1 && k !== 11) return `${num}st`;
+            if (j === 2 && k !== 12) return `${num}nd`;
+            if (j === 3 && k !== 13) return `${num}rd`;
+            return `${num}th`;
+          };
+          const milestoneStr = (yearsOfService && yearsOfService <= 45) 
+            ? `${yearsOfService}${getOrdinalSuffix(yearsOfService)} Year (${targetYear})` 
+            : `${targetYear} Annual Review`;
+          const annivDateFormatted = new Date(targetYear, annivMonth - 1, annivDay).toLocaleDateString(undefined, {
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric'
+          });
+          const dueDateFormatted = new Date(targetYear, annivMonth - 1 - 3, annivDay).toLocaleDateString(undefined, {
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric'
+          });
 
-        const updatedAlertsSent = [...(trainer.annualReviewAlertsSent || []), alertKey];
+          const updatedAlertsSent = [...(trainer.annualReviewAlertsSent || []), alertKey];
 
-        for (const manager of locationManagers) {
-          try {
-            await addDoc(collection(db, 'mail'), {
-              to: manager.email,
-              message: {
-                subject: `🎉 Annual Review Due: ${trainer.name} (${milestoneStr} - ${trainer.location})`,
-                html: `
-                  <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-                    <div style="background-color: #dc2626; color: white; padding: 16px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
-                      <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
-                        📋 Annual Staff Review Reminder
-                      </h2>
-                    </div>
-                    
-                    <p>Hi <strong>${manager.name}</strong>,</p>
-                    <p>This is a notification for location managers at <strong>${trainer.location}</strong>. Coach <strong>${trainer.name}</strong> has their work anniversary approaching.</p>
-                    
-                    <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
-                      <p style="margin: 0 0 10px 0;"><strong>Coach Name:</strong> ${trainer.name}</p>
-                      <p style="margin: 0 0 10px 0;"><strong>Location:</strong> ${trainer.location}</p>
-                      <p style="margin: 0 0 10px 0;"><strong>Work Anniversary:</strong> ${annivDateFormatted}</p>
-                      <p style="margin: 0 0 10px 0;"><strong>Milestone:</strong> ${milestoneStr}</p>
-                      <p style="margin: 0; font-size: 14px; font-weight: bold; color: ${diffDays < 0 ? '#dc2626' : '#d97706'};">
-                        Timing: ${diffDays === 0 ? 'Today is the anniversary!' : (diffDays > 0 ? `Approaching in ${diffDays} day(s)` : `Anniversary was ${Math.abs(diffDays)} day(s) ago`)}
+          for (const manager of locationManagers) {
+            try {
+              await addDoc(collection(db, 'mail'), {
+                to: manager.email,
+                message: {
+                  subject: `📋 Annual Review Due (${dueDateFormatted}): ${trainer.name} (${targetYear} Review - ${trainer.location})`,
+                  html: `
+                    <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+                      <div style="background-color: #dc2626; color: white; padding: 16px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                        <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
+                          📋 Annual Staff Review Reminder
+                        </h2>
+                      </div>
+                      
+                      <p>Hi <strong>${manager.name}</strong>,</p>
+                      <p>This is an automated notification for location managers at <strong>${trainer.location}</strong>. Annual performance reviews are due to be completed <strong>3 months prior to the employee's work anniversary</strong>.</p>
+                      
+                      <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                        <p style="margin: 0 0 8px 0;"><strong>Staff Member:</strong> ${trainer.name}</p>
+                        <p style="margin: 0 0 8px 0;"><strong>Location:</strong> ${trainer.location}</p>
+                        <p style="margin: 0 0 8px 0;"><strong>Review Period:</strong> ${milestoneStr}</p>
+                        <p style="margin: 0 0 8px 0;"><strong>Work Anniversary:</strong> ${annivDateFormatted}</p>
+                        
+                        <div style="background-color: #fee2e2; border-left: 4px solid #dc2626; padding: 12px 16px; margin-top: 12px; border-radius: 4px;">
+                          <p style="margin: 0; font-size: 15px; font-weight: bold; color: #991b1b;">
+                            📅 Review Due Date: ${dueDateFormatted}
+                          </p>
+                          <p style="margin: 4px 0 0 0; font-size: 12px; color: #7f1d1d;">
+                            (Must be completed 3 months prior to work anniversary)
+                          </p>
+                          <p style="margin: 6px 0 0 0; font-size: 13px; color: ${diffDaysToDueDate < 0 ? '#dc2626' : '#b45309'}; font-weight: bold;">
+                            Timing: ${diffDaysToDueDate === 0 ? 'Due Today!' : (diffDaysToDueDate > 0 ? `Due in ${diffDaysToDueDate} day(s)` : `Past Due by ${Math.abs(diffDaysToDueDate)} day(s)`)}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <p>Please conduct the <strong>${targetYear} Annual Performance Review</strong> with ${trainer.name} and check off the annual review completion in the Vasta Dashboard under <strong>Staff &gt; Staff Reviews &amp; Check-Ins</strong>.</p>
+                      
+                      <div style="margin: 25px 0 15px 0; text-align: center;">
+                        <span style="display: inline-block; background-color: #dc2626; color: white; padding: 10px 22px; font-weight: bold; border-radius: 6px; text-decoration: none;">
+                          Open Dashboard &gt; Staff &gt; Staff Reviews &amp; Check-Ins
+                        </span>
+                      </div>
+
+                      <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                      <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">
+                        This alert was automatically sent to location managers for ${trainer.location} from the Vasta Dashboard.
                       </p>
                     </div>
-                    
-                    <p>Please conduct the <strong>${currentYear} Annual Performance Review</strong> with ${trainer.name} and check off the annual review completion in the Vasta Dashboard.</p>
-                    
-                    <div style="margin: 25px 0 15px 0; text-align: center;">
-                      <span style="display: inline-block; background-color: #dc2626; color: white; padding: 10px 22px; font-weight: bold; border-radius: 6px; text-decoration: none;">
-                        Open Dashboard &gt; Staff &gt; Staff Reviews &amp; Check-Ins
-                      </span>
-                    </div>
+                  `
+                }
+              });
+            } catch (e) {
+              console.error("Failed to send annual review email alert document", e);
+            }
+          }
 
-                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                    <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">
-                      This alert was automatically sent to location managers for ${trainer.location} from the Vasta Dashboard.
-                    </p>
-                  </div>
-                `
-              }
+          try {
+            await updateDoc(doc(db, 'users', trainer.id), {
+              annualReviewAlertsSent: updatedAlertsSent
             });
           } catch (e) {
-            console.error("Failed to send annual review email alert document", e);
+            console.error("Failed to update annualReviewAlertsSent in Firestore", e);
           }
-        }
-
-        try {
-          await updateDoc(doc(db, 'users', trainer.id), {
-            annualReviewAlertsSent: updatedAlertsSent
-          });
-        } catch (e) {
-          console.error("Failed to update annualReviewAlertsSent in Firestore", e);
         }
       }
     };
@@ -1972,11 +1994,49 @@ function AppContent() {
       return;
     }
 
-    const currentYear = new Date().getFullYear();
-    const annivFormatted = trainer.workAnniversary ? new Date(trainer.workAnniversary + 'T00:00:00').toLocaleDateString(undefined, {
-      month: 'long',
-      day: 'numeric'
-    }) : 'Anniversary Date';
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const parts = (trainer.workAnniversary || '').split('-');
+    const startYear = parts.length === 3 ? parseInt(parts[0], 10) : null;
+    const annivMonth = parts.length >= 2 ? (parts.length === 3 ? parseInt(parts[1], 10) : parseInt(parts[0], 10)) : null;
+    const annivDay = parts.length >= 2 ? (parts.length === 3 ? parseInt(parts[2], 10) : parseInt(parts[1], 10)) : null;
+
+    let targetYear = currentYear;
+    let annivDateFormatted = trainer.workAnniversary || 'Anniversary Date';
+    let dueDateFormatted = '3 Months Prior to Anniversary';
+    let milestoneStr = 'Annual Review';
+
+    if (annivMonth && annivDay && !isNaN(annivMonth) && !isNaN(annivDay)) {
+      // Determine if current year is done or passed
+      const isCurrentDone = (trainer.completedAnnualReviewYears || []).includes(currentYear);
+      const dueThisYearUtc = new Date(Date.UTC(currentYear, annivMonth - 1 - 3, annivDay));
+      const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+      const daysToDueThisYear = Math.round((dueThisYearUtc.getTime() - todayUtc.getTime()) / (1000 * 60 * 60 * 24));
+
+      targetYear = (isCurrentDone || daysToDueThisYear < -60) ? currentYear + 1 : currentYear;
+
+      const yearsOfService = (startYear && startYear >= 1990 && targetYear >= startYear) ? Math.max(1, targetYear - startYear) : null;
+      const getOrdinalSuffix = (num: number) => {
+        const j = num % 10, k = num % 100;
+        if (j === 1 && k !== 11) return `${num}st`;
+        if (j === 2 && k !== 12) return `${num}nd`;
+        if (j === 3 && k !== 13) return `${num}rd`;
+        return `${num}th`;
+      };
+      milestoneStr = (yearsOfService && yearsOfService <= 45) 
+        ? `${yearsOfService}${getOrdinalSuffix(yearsOfService)} Year (${targetYear})` 
+        : `${targetYear} Annual Review`;
+      annivDateFormatted = new Date(targetYear, annivMonth - 1, annivDay).toLocaleDateString(undefined, {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric'
+      });
+      dueDateFormatted = new Date(targetYear, annivMonth - 1 - 3, annivDay).toLocaleDateString(undefined, {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric'
+      });
+    }
 
     let sentCount = 0;
     for (const manager of locationManagers) {
@@ -1984,27 +2044,46 @@ function AppContent() {
         await addDoc(collection(db, 'mail'), {
           to: manager.email,
           message: {
-            subject: `📋 Annual Review Reminder: ${trainer.name} (${trainer.location})`,
+            subject: `📋 Annual Review Due (${dueDateFormatted}): ${trainer.name} (${targetYear} Review - ${trainer.location})`,
             html: `
-              <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px;">
-                <div style="background-color: #dc2626; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
-                  <h2 style="margin: 0; font-size: 18px; font-weight: bold;">
-                    📋 Annual Performance Review Notice
+              <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+                <div style="background-color: #dc2626; color: white; padding: 16px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                  <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
+                    📋 Annual Staff Review Reminder
                   </h2>
                 </div>
                 
                 <p>Hi <strong>${manager.name}</strong>,</p>
-                <p>This is a reminder for <strong>${trainer.location}</strong> management to conduct the annual performance review for coach <strong>${trainer.name}</strong> based on their work anniversary (${annivFormatted}).</p>
+                <p>This is a notification for location managers at <strong>${trainer.location}</strong>. Annual performance reviews are due to be completed <strong>3 months prior to the employee's work anniversary</strong>.</p>
                 
-                <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 15px 0;">
+                <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
                   <p style="margin: 0 0 8px 0;"><strong>Staff Member:</strong> ${trainer.name}</p>
                   <p style="margin: 0 0 8px 0;"><strong>Location:</strong> ${trainer.location}</p>
-                  <p style="margin: 0;"><strong>Work Anniversary:</strong> ${annivFormatted}</p>
+                  <p style="margin: 0 0 8px 0;"><strong>Review Period:</strong> ${milestoneStr}</p>
+                  <p style="margin: 0 0 8px 0;"><strong>Work Anniversary:</strong> ${annivDateFormatted}</p>
+                  
+                  <div style="background-color: #fee2e2; border-left: 4px solid #dc2626; padding: 12px 16px; margin-top: 12px; border-radius: 4px;">
+                    <p style="margin: 0; font-size: 15px; font-weight: bold; color: #991b1b;">
+                      📅 Review Due Date: ${dueDateFormatted}
+                    </p>
+                    <p style="margin: 4px 0 0 0; font-size: 12px; color: #7f1d1d;">
+                      (Must be completed 3 months prior to work anniversary)
+                    </p>
+                  </div>
                 </div>
                 
-                <p>Please log in to the Vasta Dashboard under <strong>Staff &gt; Staff Reviews &amp; Check-Ins</strong> to record the ${currentYear} Annual Review.</p>
+                <p>Please conduct the <strong>${targetYear} Annual Performance Review</strong> with ${trainer.name} and check off the annual review completion in the Vasta Dashboard under <strong>Staff &gt; Staff Reviews &amp; Check-Ins</strong>.</p>
+                
+                <div style="margin: 25px 0 15px 0; text-align: center;">
+                  <span style="display: inline-block; background-color: #dc2626; color: white; padding: 10px 22px; font-weight: bold; border-radius: 6px; text-decoration: none;">
+                    Open Dashboard &gt; Staff &gt; Staff Reviews &amp; Check-Ins
+                  </span>
+                </div>
+
                 <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                <p style="font-size: 12px; color: #94a3b8; margin: 0;">Sent from Vasta Management Dashboard</p>
+                <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">
+                  Sent from Vasta Management Dashboard
+                </p>
               </div>
             `
           }
@@ -2016,7 +2095,7 @@ function AppContent() {
     }
 
     // Mark alert key as sent
-    const alertKey = `annual-review-${currentYear}`;
+    const alertKey = `annual-review-${targetYear}`;
     const updatedAlertsSent = Array.from(new Set([...(trainer.annualReviewAlertsSent || []), alertKey]));
     try {
       await updateDoc(doc(db, 'users', trainer.id), {
