@@ -52,17 +52,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
       
       if (userDoc.exists()) {
-        setUser(userDoc.data() as User);
+        const uData = userDoc.data() as User;
+        const isOwner = firebaseUser.email?.toLowerCase().trim() === 'quinnledak@vastasports.com';
+        if (isOwner && uData.role !== 'owner') {
+          const updatedUser: User = { ...uData, role: 'owner' };
+          await setDoc(doc(db, 'users', firebaseUser.uid), { role: 'owner' }, { merge: true });
+          setUser(updatedUser);
+        } else {
+          setUser(uData);
+        }
       } else {
         // 2. If not, check if they are invited
         const inviteDoc = await getDoc(doc(db, 'invites', firebaseUser.email?.toLowerCase() || ''));
         
         // Special case for the owner
-        const isOwner = firebaseUser.email === 'quinnledak@vastasports.com';
+        const isOwner = firebaseUser.email?.toLowerCase().trim() === 'quinnledak@vastasports.com';
 
         if (inviteDoc.exists() || isOwner) {
           const inviteData = inviteDoc.data();
-          const role = isOwner ? 'admin' : (inviteData?.role || 'trainer');
+          const role = isOwner ? 'owner' : (inviteData?.role || 'trainer');
           const location = isOwner ? 'Dorset Street' : (inviteData?.location || 'Dorset Street');
           
           const newUser: User = {

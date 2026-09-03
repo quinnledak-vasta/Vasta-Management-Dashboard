@@ -782,8 +782,9 @@ function AppContent() {
           if (shouldTriggerExpiration || shouldTriggerRenewal || shouldTriggerExpected) {
             // Find recipients: location manager (admin of same location) + owner
             const recipients = trainers.filter(t => 
-              (t.role === 'admin' && t.location === trainer.location) || 
-              t.role === 'owner'
+              (t.role === 'admin' && trainer.location && t.location?.trim().toLowerCase() === trainer.location.trim().toLowerCase()) || 
+              t.role === 'owner' ||
+              t.email?.toLowerCase().trim() === 'quinnledak@vastasports.com'
             );
 
             let dateLabel = '';
@@ -2732,8 +2733,9 @@ function AppContent() {
         // Send email alerts to location admins and owners
         try {
           const recipients = trainers.filter(t => 
-            (t.role === 'admin' && t.location === selectedTrainer?.location) || 
-            t.role === 'owner'
+            (t.role === 'admin' && selectedTrainer?.location && t.location?.trim().toLowerCase() === selectedTrainer.location.trim().toLowerCase()) || 
+            t.role === 'owner' ||
+            t.email?.toLowerCase().trim() === 'quinnledak@vastasports.com'
           );
 
           const baseUrl = window.location.origin || 'https://vasta-dashboard.web.app';
@@ -2997,6 +2999,78 @@ function AppContent() {
     }
   };
 
+  // Helper to reliably find all location managers and owners for restock notifications
+  const getRestockRecipients = (location: string) => {
+    const normLocation = (location || '').trim().toLowerCase();
+    const PRIMARY_OWNER_EMAIL = 'quinnledak@vastasports.com';
+
+    interface RestockRecipient {
+      name: string;
+      email: string;
+      role: 'owner' | 'manager' | 'owner_and_manager';
+      label: string;
+    }
+
+    const recipientMap = new Map<string, RestockRecipient>();
+    const managers: RestockRecipient[] = [];
+    const owners: RestockRecipient[] = [];
+
+    // 1. Identify Location Managers (Admins assigned to this specific facility)
+    trainers.forEach(t => {
+      const tLoc = (t.location || '').trim().toLowerCase();
+      const tEmail = (t.email || '').trim().toLowerCase();
+      if (t.role === 'admin' && tLoc === normLocation && tEmail) {
+        const isOwnerEmail = tEmail === PRIMARY_OWNER_EMAIL;
+        const rec: RestockRecipient = {
+          name: t.name || 'Location Manager',
+          email: tEmail,
+          role: isOwnerEmail ? 'owner_and_manager' : 'manager',
+          label: isOwnerEmail ? `Owner & Location Manager (${t.location || location})` : `Location Manager (${t.location || location})`
+        };
+        if (!managers.some(m => m.email === tEmail)) {
+          managers.push(rec);
+        }
+        recipientMap.set(tEmail, rec);
+      }
+    });
+
+    // 2. Identify Owners (Role 'owner' or email quinnledak@vastasports.com)
+    trainers.forEach(t => {
+      const tEmail = (t.email || '').trim().toLowerCase();
+      if ((t.role === 'owner' || tEmail === PRIMARY_OWNER_EMAIL) && tEmail) {
+        const existing = recipientMap.get(tEmail);
+        const rec: RestockRecipient = {
+          name: t.name || 'Quinn Ledak (Owner)',
+          email: tEmail,
+          role: existing ? 'owner_and_manager' : 'owner',
+          label: existing ? `Owner & Location Manager (${t.location || location})` : 'Owner'
+        };
+        if (!owners.some(o => o.email === tEmail)) {
+          owners.push(rec);
+        }
+        recipientMap.set(tEmail, rec);
+      }
+    });
+
+    // 3. Guaranteed Owner Fallback: Quinn Ledak must always be included
+    if (!recipientMap.has(PRIMARY_OWNER_EMAIL)) {
+      const ownerFallback: RestockRecipient = {
+        name: 'Quinn Ledak',
+        email: PRIMARY_OWNER_EMAIL,
+        role: 'owner',
+        label: 'Owner'
+      };
+      owners.push(ownerFallback);
+      recipientMap.set(PRIMARY_OWNER_EMAIL, ownerFallback);
+    }
+
+    return {
+      allRecipients: Array.from(recipientMap.values()),
+      managers,
+      owners
+    };
+  };
+
   const handleSubmitRestockRequest = async () => {
     if (!user || !selectedRestockLocation) {
       toast.error("Please select a location");
@@ -3018,12 +3092,16 @@ function AppContent() {
       return;
     }
 
-    try {
-      const recipients = trainers.filter(t => 
-        (t.role === 'admin' && t.location === selectedRestockLocation) || 
-        t.role === 'owner'
-      );
+    const { allRecipients, managers, owners } = getRestockRecipients(selectedRestockLocation);
 
+    if (allRecipients.length === 0) {
+      toast.error("Could not determine any recipients for this request.");
+      return;
+    }
+
+    const toastLoadingId = toast.loading(`Sending restock request to ${allRecipients.length} recipient(s)...`);
+
+    try {
       const itemsListHtml = itemsRequested.map(item => `
         <tr style="border-bottom: 1px solid #e2e8f0;">
           <td style="padding: 10px; font-weight: bold; color: #334155;">${item.name}</td>
@@ -3033,8 +3111,16 @@ function AppContent() {
         </tr>
       `).join('');
 
-      for (const recipient of recipients) {
-        if (recipient.email) {
+      const managerSummaryText = managers.length > 0 
+        ? managers.map(m => `${m.name} (${m.email})`).join(', ') 
+        : 'None assigned yet';
+      const ownerSummaryText = owners.map(o => `${o.name} (${o.email})`).join(', ');
+
+      let successCount = 0;
+      const sendErrors: string[] = [];
+
+      for (const recipient of allRecipients) {
+        try {
           await addDoc(collection(db, 'mail'), {
             to: recipient.email,
             message: {
@@ -3043,13 +3129,20 @@ function AppContent() {
                 <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
                   <div style="background-color: #dc2626; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
                     <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
-                      🛒 New Restock Request
+                      🛒 New Inventory Restock Request
                     </h2>
                   </div>
                   
                   <p>Hi <strong>${recipient.name}</strong>,</p>
                   <p>A new inventory restock request has been submitted by <strong>${user.name}</strong> for the <strong>${selectedRestockLocation}</strong> facility.</p>
                   
+                  <div style="background-color: #f8fafc; padding: 12px 16px; border-radius: 8px; margin: 16px 0; font-size: 13px; color: #475569; border: 1px solid #e2e8f0;">
+                    <p style="margin: 0 0 4px 0;"><strong>Facility:</strong> ${selectedRestockLocation}</p>
+                    <p style="margin: 0 0 4px 0;"><strong>Location Manager(s):</strong> ${managerSummaryText}</p>
+                    <p style="margin: 0 0 4px 0;"><strong>Owner(s):</strong> ${ownerSummaryText}</p>
+                    <p style="margin: 0;"><strong>Recipient Role:</strong> ${recipient.label}</p>
+                  </div>
+
                   <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
                     <thead>
                       <tr style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0; text-align: left;">
@@ -3074,22 +3167,37 @@ function AppContent() {
                   <p>Please review local inventory and coordinate purchasing as needed.</p>
                   
                   <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                  <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated request form from the Vasta Personal Training Dashboard.</p>
+                  <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated request from the Vasta Personal Training Dashboard.</p>
                 </div>
               `
             }
           });
+          successCount++;
+        } catch (mailError) {
+          console.error(`Error adding mail doc for ${recipient.email}:`, mailError);
+          sendErrors.push(recipient.email);
         }
       }
 
-      toast.success(`Restock request sent to location manager and owner for ${itemsRequested.length} item(s)!`);
-      setIsRestockRequestOpen(false);
-      setSelectedRestockLocation('');
-      setRestockItemIds({});
-      setRestockItemQuantities({});
-      setRestockNotes('');
+      if (successCount > 0) {
+        let successMsg = `Restock request sent to Owner (${ownerSummaryText})`;
+        if (managers.length > 0) {
+          successMsg += ` and Location Manager (${managerSummaryText})`;
+        } else {
+          successMsg += `. (Note: No location manager is currently assigned to ${selectedRestockLocation})`;
+        }
+        toast.success(successMsg, { id: toastLoadingId, duration: 6000 });
+        setIsRestockRequestOpen(false);
+        setSelectedRestockLocation('');
+        setRestockItemIds({});
+        setRestockItemQuantities({});
+        setRestockNotes('');
+      } else {
+        toast.error(`Failed to dispatch restock request emails: ${sendErrors.join(', ')}`, { id: toastLoadingId });
+      }
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'restockRequests');
+      toast.dismiss(toastLoadingId);
+      handleFirestoreError(error, OperationType.WRITE, 'mail');
     }
   };
 
@@ -4006,6 +4114,46 @@ function AppContent() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {selectedRestockLocation && (() => {
+                    const { managers, owners } = getRestockRecipients(selectedRestockLocation);
+                    return (
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-700 space-y-2">
+                        <div className="flex items-center gap-1.5 font-semibold text-slate-900">
+                          <Mail className="w-4 h-4 text-red-600 shrink-0" />
+                          <span>Alert Email Recipients for {selectedRestockLocation}:</span>
+                        </div>
+                        <div className="grid sm:grid-cols-2 gap-2 pt-1 border-t border-slate-200">
+                          <div>
+                            <span className="font-semibold text-slate-600 block mb-1">Location Manager:</span>
+                            {managers.length > 0 ? (
+                              <div className="space-y-1">
+                                {managers.map(m => (
+                                  <Badge key={m.email} variant="outline" className="bg-white text-slate-800 border-slate-300 font-medium py-1 px-2 text-[11px] block truncate">
+                                    {m.name} ({m.email})
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-amber-700 font-medium text-[11px] block bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                                No manager assigned yet (routes to owner)
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            <span className="font-semibold text-slate-600 block mb-1">Owner:</span>
+                            <div className="space-y-1">
+                              {owners.map(o => (
+                                <Badge key={o.email} variant="outline" className="bg-white text-slate-800 border-slate-300 font-medium py-1 px-2 text-[11px] block truncate">
+                                  {o.name} ({o.email})
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {selectedRestockLocation && (
                     <div className="space-y-4">
