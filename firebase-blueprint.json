@@ -68,11 +68,16 @@
       "properties": {
         "userId": { "type": "string" },
         "userName": { "type": "string" },
+        "userEmail": { "type": "string", "format": "email" },
         "startDate": { "type": "string", "format": "date" },
         "endDate": { "type": "string", "format": "date" },
         "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
         "type": { "type": "string", "enum": ["vacation", "sick", "personal", "other"] },
-        "hours": { "type": "number", "description": "Number of hours affected" }
+        "hours": { "type": "number", "description": "Number of hours affected" },
+        "approvedBy": { "type": "string" },
+        "approvedAt": { "type": "string", "format": "date-time" },
+        "emailSent": { "type": "boolean" },
+        "emailSentAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "startDate", "endDate", "status", "type"]
     },

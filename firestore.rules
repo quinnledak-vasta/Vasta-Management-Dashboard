@@ -121,6 +121,7 @@ service cloud.firestore {
     function isValidVacation(data) {
       return data.get('userId', '') is string &&
              data.get('userName', '') is string &&
+             (data.get('userEmail', null) == null || data.get('userEmail', '') is string) &&
              data.get('startDate', '') is string &&
              data.get('endDate', '') is string &&
              data.get('status', 'pending') in ['pending', 'approved', 'rejected'] &&
@@ -129,6 +130,10 @@ service cloud.firestore {
              (data.get('notes', null) == null || data.get('notes', '') is string) &&
              (data.get('createdAt', null) == null || data.get('createdAt', '') is string) &&
              (data.get('updatedAt', null) == null || data.get('updatedAt', '') is string) &&
+             (data.get('approvedBy', null) == null || data.get('approvedBy', '') is string) &&
+             (data.get('approvedAt', null) == null || data.get('approvedAt', '') is string) &&
+             (data.get('emailSent', null) == null || data.get('emailSent', false) is bool) &&
+             (data.get('emailSentAt', null) == null || data.get('emailSentAt', '') is string) &&
              data.get('totalDays', 0) is number;
     }
 

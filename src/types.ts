@@ -158,6 +158,7 @@ export interface VacationRequest {
   id: string;
   userId: string;
   userName: string;
+  userEmail?: string;
   startDate: string;
   endDate: string;
   status: VacationStatus;
@@ -166,6 +167,10 @@ export interface VacationRequest {
   notes?: string;
   createdAt: string;
   totalDays: number;
+  approvedBy?: string;
+  approvedAt?: string;
+  emailSent?: boolean;
+  emailSentAt?: string;
 }
 
 export interface InventoryReportItem {

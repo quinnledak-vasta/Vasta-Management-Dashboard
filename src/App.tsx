@@ -125,7 +125,9 @@ import {
   arrayUnion,
   where,
   or,
-  writeBatch
+  writeBatch,
+  getDocs,
+  limit
 } from 'firebase/firestore';
 import { 
   Task, 
@@ -592,6 +594,241 @@ function AppContent() {
     return () => unsubscribe();
   }, [user]);
 
+  // Helper to reliably find staff email and dispatch approval/rejection notification email
+  const sendVacationDecisionNotification = async (
+    vacation: VacationRequest, 
+    decision: VacationStatus, 
+    approverName: string
+  ): Promise<{ success: boolean; recipientEmail?: string; recipientName?: string; error?: string }> => {
+    try {
+      if (decision === 'pending') {
+        return { success: false, error: 'Cannot send notification for pending status.' };
+      }
+
+      let recipientEmail = (vacation.userEmail || '').trim().toLowerCase();
+      let staffName = vacation.userName || 'Staff Member';
+
+      // 1. If no valid email on vacation, search local trainers state by id
+      if (!recipientEmail || !recipientEmail.includes('@')) {
+        const foundById = trainers.find(t => t.id === vacation.userId);
+        if (foundById && foundById.email) {
+          recipientEmail = foundById.email.trim().toLowerCase();
+          if (foundById.name) staffName = foundById.name;
+        }
+      }
+
+      // 2. Search local trainers state by name
+      if ((!recipientEmail || !recipientEmail.includes('@')) && vacation.userName) {
+        const foundByName = trainers.find(t => 
+          (t.name || '').trim().toLowerCase() === vacation.userName.trim().toLowerCase()
+        );
+        if (foundByName && foundByName.email) {
+          recipientEmail = foundByName.email.trim().toLowerCase();
+          if (foundByName.name) staffName = foundByName.name;
+        }
+      }
+
+      // 3. Query Firestore 'users' collection directly by userId
+      if ((!recipientEmail || !recipientEmail.includes('@')) && vacation.userId) {
+        try {
+          const userDocSnap = await getDoc(doc(db, 'users', vacation.userId));
+          if (userDocSnap.exists()) {
+            const uData = userDocSnap.data() as any;
+            if (uData.email) {
+              recipientEmail = uData.email.trim().toLowerCase();
+            }
+            if (uData.name) {
+              staffName = uData.name;
+            }
+          }
+        } catch (fetchErr) {
+          console.warn("Could not query user doc by userId:", fetchErr);
+        }
+      }
+
+      // 4. Query Firestore 'users' collection by name if still missing
+      if ((!recipientEmail || !recipientEmail.includes('@')) && vacation.userName) {
+        try {
+          const userQ = query(collection(db, 'users'), where('name', '==', vacation.userName), limit(1));
+          const userQSnap = await getDocs(userQ);
+          if (!userQSnap.empty) {
+            const uData = userQSnap.docs[0].data() as any;
+            if (uData.email) {
+              recipientEmail = uData.email.trim().toLowerCase();
+            }
+          }
+        } catch (fetchErr) {
+          console.warn("Could not query user doc by name:", fetchErr);
+        }
+      }
+
+      // 5. Query Firestore 'invites' collection by name if still missing
+      if ((!recipientEmail || !recipientEmail.includes('@')) && vacation.userName) {
+        try {
+          const invQ = query(collection(db, 'invites'), where('name', '==', vacation.userName), limit(1));
+          const invQSnap = await getDocs(invQ);
+          if (!invQSnap.empty) {
+            const iData = invQSnap.docs[0].data() as any;
+            if (iData.email) {
+              recipientEmail = iData.email.trim().toLowerCase();
+            }
+          }
+        } catch (invErr) {
+          console.warn("Could not query invites:", invErr);
+        }
+      }
+
+      // Final validation
+      if (!recipientEmail || !recipientEmail.includes('@')) {
+        return {
+          success: false,
+          recipientName: staffName,
+          error: `No email address found for staff member "${staffName}". Please verify their user profile.`
+        };
+      }
+
+      const isApproved = decision === 'approved';
+      const baseUrl = window.location.origin || 'https://vasta-dashboard.web.app';
+      const dashboardUrl = `${baseUrl}/?tab=vacations`;
+
+      // Safe date formatting
+      let formattedDates = `${vacation.startDate} to ${vacation.endDate}`;
+      try {
+        const s = parseISO(vacation.startDate);
+        const e = parseISO(vacation.endDate);
+        formattedDates = `${format(s, 'EEE, MMM d, yyyy')} – ${format(e, 'EEE, MMM d, yyyy')}`;
+      } catch (dateErr) {
+        console.warn("Error formatting vacation dates:", dateErr);
+      }
+
+      const typeLabel = (vacation.type || 'vacation').charAt(0).toUpperCase() + (vacation.type || 'vacation').slice(1);
+      const subject = isApproved
+        ? `🎉 Vacation Request Approved: ${formattedDates}`
+        : `Vacation Request Update: ${formattedDates}`;
+
+      const htmlContent = `
+        <div style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 25px; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+          <div style="text-align: center; margin-bottom: 20px;">
+            <span style="font-weight: 800; font-size: 22px; color: #dc2626; letter-spacing: -0.5px;">Vasta Personal Training</span>
+            <p style="margin: 4px 0 0 0; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Staff Scheduling & Operations</p>
+          </div>
+
+          <div style="background-color: ${isApproved ? '#f0fdf4' : '#fef2f2'}; border: 1px solid ${isApproved ? '#bbf7d0' : '#fecaca'}; border-radius: 8px; padding: 18px 20px; text-align: center; margin-bottom: 24px;">
+            <span style="font-size: 32px; display: block; margin-bottom: 6px;">${isApproved ? '🎉' : '📋'}</span>
+            <h2 style="color: ${isApproved ? '#15803d' : '#b91c1c'}; font-size: 20px; margin: 0; font-weight: 700;">
+              ${isApproved ? 'Vacation Request Approved!' : 'Vacation Request Update'}
+            </h2>
+            <p style="margin: 6px 0 0 0; font-size: 14px; color: ${isApproved ? '#166534' : '#991b1b'}; font-weight: 500;">
+              ${isApproved 
+                ? 'Your requested time-off has been approved and logged into the staff calendar.' 
+                : 'Your requested time-off was reviewed and not approved by administration.'}
+            </p>
+          </div>
+
+          <p style="font-size: 15px; line-height: 1.6; color: #334155; margin-bottom: 12px;">
+            Hi <strong>${staffName}</strong>,
+          </p>
+          <p style="font-size: 14px; line-height: 1.6; color: #334155; margin-bottom: 20px;">
+            ${isApproved 
+              ? `Your time-off request has been <strong>approved</strong> by <strong>${approverName}</strong>.`
+              : `Your time-off request was reviewed and marked as <strong>rejected</strong> by <strong>${approverName}</strong>.`}
+          </p>
+
+          <div style="background-color: #f8fafc; padding: 18px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 24px;">
+            <h3 style="margin: 0 0 12px 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; font-weight: 700;">
+              Time-Off Summary
+            </h3>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 8px 0; color: #64748b; width: 120px; font-weight: 500;">Decision:</td>
+                <td style="padding: 8px 0; font-weight: 700; color: ${isApproved ? '#16a34a' : '#dc2626'};">
+                  ${isApproved ? '✔ Approved' : '✘ Rejected'}
+                </td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Dates:</td>
+                <td style="padding: 8px 0; font-weight: 600; color: #0f172a;">
+                  ${formattedDates} <span style="color: #64748b; font-weight: normal;">(${vacation.totalDays} day${vacation.totalDays === 1 ? '' : 's'})</span>
+                </td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Type:</td>
+                <td style="padding: 8px 0; color: #0f172a; font-weight: 600;">
+                  ${typeLabel}
+                </td>
+              </tr>
+              ${vacation.hours ? `
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Daily Hours:</td>
+                <td style="padding: 8px 0; color: #0f172a;">
+                  ${vacation.hours} hrs/day
+                </td>
+              </tr>
+              ` : ''}
+              ${vacation.notes ? `
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Your Notes:</td>
+                <td style="padding: 8px 0; color: #334155; font-style: italic;">
+                  "${vacation.notes}"
+                </td>
+              </tr>
+              ` : ''}
+              <tr>
+                <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Reviewed By:</td>
+                <td style="padding: 8px 0; color: #0f172a; font-weight: 600;">
+                  ${approverName}
+                </td>
+              </tr>
+            </table>
+          </div>
+
+          <div style="text-align: center; margin: 26px 0 16px 0;">
+            <a href="${dashboardUrl}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 28px; font-weight: 700; border-radius: 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(220, 38, 38, 0.2);">
+              Open Staff Schedule
+            </a>
+          </div>
+
+          <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 22px 0 16px 0;" />
+          <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0; line-height: 1.4;">
+            This is an automated notification from the Vasta Personal Training Dashboard.<br />
+            Need changes to this request? Please contact your location manager or Quinn Ledak.
+          </p>
+        </div>
+      `;
+
+      await addDoc(collection(db, 'mail'), {
+        to: recipientEmail,
+        message: {
+          subject,
+          html: htmlContent
+        }
+      });
+
+      // Update the vacation record with email tracking and cached userEmail
+      try {
+        await updateDoc(doc(db, 'vacations', vacation.id), {
+          userEmail: recipientEmail,
+          emailSent: true,
+          emailSentAt: new Date().toISOString()
+        });
+      } catch (updErr) {
+        console.warn("Could not record emailSent on vacation doc:", updErr);
+      }
+
+      return {
+        success: true,
+        recipientEmail,
+        recipientName: staffName
+      };
+    } catch (err: any) {
+      console.error("Error sending vacation decision email:", err);
+      return {
+        success: false,
+        error: err?.message || 'Failed to dispatch email.'
+      };
+    }
+  };
+
   // Handle direct url actions (Approve / Reject Vacation from email)
   useEffect(() => {
     if (!user || !isAdmin) return;
@@ -616,50 +853,38 @@ function AppContent() {
             return;
           }
           
-          const vData = vacationDoc.data() as VacationRequest;
+          const vData = { id: vacationDoc.id, ...vacationDoc.data() } as VacationRequest;
+          const approverName = user.name || user.email || 'Administrator';
+          const nowIso = new Date().toISOString();
+
           if (vData.status === targetStatus) {
-            toast.info(`Request was already ${targetStatus}.`, { id: toastId });
+            // Re-send or ensure notification if already in target status
+            const emailResult = await sendVacationDecisionNotification(vData, targetStatus, approverName);
+            if (emailResult.success) {
+              toast.info(`Request was already ${targetStatus}. Notification sent to ${emailResult.recipientEmail}.`, { id: toastId, duration: 5000 });
+            } else {
+              toast.info(`Request was already ${targetStatus}.`, { id: toastId });
+            }
           } else {
             // Perform Firestore update
-            await updateDoc(vacationRef, { status: targetStatus });
-            toast.success(`Vacation request successfully ${targetStatus}!`, { id: toastId });
-            
-            // Queue an email notification back to the staff member who requested
-            if (vData.userId) {
-              const userRef = doc(db, 'users', vData.userId);
-              const userDocSnapshot = await getDoc(userRef);
-              if (userDocSnapshot.exists()) {
-                const trainerData = userDocSnapshot.data() as Trainer;
-                if (trainerData.email) {
-                  try {
-                    await addDoc(collection(db, 'mail'), {
-                      to: trainerData.email,
-                      message: {
-                        subject: `Vacation Request ${targetStatus.charAt(0).toUpperCase() + targetStatus.slice(1)}`,
-                        html: `
-                          <div style="font-family: sans-serif; padding: 25px; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
-                            <div style="text-align: center; margin-bottom: 20px;">
-                              <span style="font-weight: bold; font-size: 20px; color: #ef4444; letter-spacing: -0.5px;">Vasta Personal Training</span>
-                            </div>
-                            <h2 style="color: ${targetStatus === 'approved' ? '#16a34a' : '#dc2626'}; font-size: 18px; margin-top: 0; border-bottom: 1px solid #f1f5f9; padding-bottom: 12px; font-weight: 700;">
-                              Vacation Request ${targetStatus.charAt(0).toUpperCase() + targetStatus.slice(1)}
-                            </h2>
-                            <p style="font-size: 14px; line-height: 1.5; color: #334155;">Hi <strong>${trainerData.name}</strong>,</p>
-                            <p style="font-size: 14px; line-height: 1.5; color: #334155;">
-                              Your vacation request for <strong>${new Date(vData.startDate).toLocaleDateString()} to ${new Date(vData.endDate).toLocaleDateString()}</strong> has been <strong>${targetStatus}</strong> by an administrator.
-                            </p>
-                            <p style="font-size: 14px; line-height: 1.5; color: #334155;">Please log in to the dashboard for more details.</p>
-                            <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
-                            <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
-                          </div>
-                        `
-                      }
-                    });
-                  } catch (mailErr) {
-                    console.error("Failed to enqueue status update mail:", mailErr);
-                  }
-                }
-              }
+            await updateDoc(vacationRef, { 
+              status: targetStatus,
+              approvedBy: approverName,
+              approvedAt: nowIso
+            });
+
+            const updatedVacation: VacationRequest = {
+              ...vData,
+              status: targetStatus,
+              approvedBy: approverName,
+              approvedAt: nowIso
+            };
+
+            const emailResult = await sendVacationDecisionNotification(updatedVacation, targetStatus, approverName);
+            if (emailResult.success) {
+              toast.success(`Vacation request successfully ${targetStatus}! Email notification sent to ${emailResult.recipientEmail}.`, { id: toastId, duration: 6000 });
+            } else {
+              toast.warning(`Vacation request ${targetStatus}, but could not send email: ${emailResult.error}`, { id: toastId, duration: 6000 });
             }
           }
           
@@ -2700,10 +2925,13 @@ function AppContent() {
     }
 
     try {
+      const memberEmail = selectedTrainer?.email || (user?.id === newVacation.userId ? (user.email || '') : '');
+
       if (editingVacationId) {
         const vacationData = {
           userId: newVacation.userId,
           userName: selectedTrainer?.name || 'Unknown',
+          userEmail: memberEmail,
           startDate: newVacation.startDate,
           endDate: newVacation.endDate,
           type: newVacation.type,
@@ -2718,6 +2946,7 @@ function AppContent() {
         const vacationData = {
           userId: newVacation.userId,
           userName: selectedTrainer?.name || 'Unknown',
+          userEmail: memberEmail,
           startDate: newVacation.startDate,
           endDate: newVacation.endDate,
           status: 'pending' as VacationStatus,
@@ -2831,39 +3060,65 @@ function AppContent() {
 
   const handleUpdateVacationStatus = async (vacationId: string, status: VacationStatus) => {
     if (!user || !isAdmin) return;
+    const toastId = toast.loading(`Updating vacation request to ${status}...`);
+
     try {
-      await updateDoc(doc(db, 'vacations', vacationId), { status });
-      toast.success(`Vacation request ${status}`);
-      
-      // Notify the user who requested the vacation
-      const vacation = vacations.find(v => v.id === vacationId);
-      if (vacation && vacation.userId) {
-        const trainer = trainers.find(t => t.id === vacation.userId);
-        if (trainer && trainer.email) {
-          try {
-            await addDoc(collection(db, 'mail'), {
-              to: trainer.email,
-              message: {
-                subject: `Vacation Request ${status.charAt(0).toUpperCase() + status.slice(1)}`,
-                html: `
-                  <div style="font-family: sans-serif; padding: 20px; color: #333;">
-                    <h2 style="color: ${status === 'approved' ? '#22c55e' : '#ef4444'};">Vacation Request ${status.charAt(0).toUpperCase() + status.slice(1)}</h2>
-                    <p>Hi <strong>${trainer.name}</strong>,</p>
-                    <p>Your vacation request for <strong>${new Date(vacation.startDate).toLocaleDateString()} to ${new Date(vacation.endDate).toLocaleDateString()}</strong> has been <strong>${status}</strong> by an administrator.</p>
-                    <p>Please log in to the dashboard for more details.</p>
-                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                    <p style="font-size: 12px; color: #94a3b8;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
-                  </div>
-                `
-              }
-            });
-          } catch (emailError) {
-            console.error("Error sending vacation status update email:", emailError);
-          }
+      let targetVacation = vacations.find(v => v.id === vacationId);
+      if (!targetVacation) {
+        const vDoc = await getDoc(doc(db, 'vacations', vacationId));
+        if (vDoc.exists()) {
+          targetVacation = { id: vDoc.id, ...vDoc.data() } as VacationRequest;
         }
       }
+
+      if (!targetVacation) {
+        toast.error("Vacation request not found", { id: toastId });
+        return;
+      }
+
+      const approverName = user.name || user.email || 'Administrator';
+      const nowIso = new Date().toISOString();
+
+      await updateDoc(doc(db, 'vacations', vacationId), { 
+        status,
+        approvedBy: approverName,
+        approvedAt: nowIso
+      });
+
+      const updatedVacation: VacationRequest = {
+        ...targetVacation,
+        status,
+        approvedBy: approverName,
+        approvedAt: nowIso
+      };
+
+      // Dispatch approval/rejection email to the staff member
+      const emailResult = await sendVacationDecisionNotification(updatedVacation, status, approverName);
+
+      if (emailResult.success) {
+        toast.success(`Vacation request ${status}! Notification email dispatched to ${emailResult.recipientEmail}.`, { id: toastId, duration: 5000 });
+      } else {
+        toast.warning(`Vacation request ${status}, but could not dispatch email: ${emailResult.error}`, { id: toastId, duration: 6000 });
+      }
     } catch (error) {
+      toast.dismiss(toastId);
       handleFirestoreError(error, OperationType.UPDATE, `vacations/${vacationId}`);
+    }
+  };
+
+  const handleResendVacationApprovalEmail = async (vacation: VacationRequest) => {
+    if (!user || !isAdmin) return;
+    const toastId = toast.loading(`Sending notification email to ${vacation.userName}...`);
+    try {
+      const approverName = vacation.approvedBy || user.name || user.email || 'Administrator';
+      const emailResult = await sendVacationDecisionNotification(vacation, vacation.status, approverName);
+      if (emailResult.success) {
+        toast.success(`Notification email dispatched to ${emailResult.recipientEmail}!`, { id: toastId, duration: 5000 });
+      } else {
+        toast.error(`Could not send email: ${emailResult.error}`, { id: toastId, duration: 6000 });
+      }
+    } catch (err: any) {
+      toast.error(`Error sending email: ${err?.message || 'Unknown error'}`, { id: toastId });
     }
   };
 
@@ -5670,21 +5925,32 @@ function AppContent() {
                             </TableCell>
                             <TableCell className="text-xs font-bold text-slate-500">{vacation.totalDays}d</TableCell>
                             <TableCell>
-                              <Badge className={`capitalize text-[10px] ${
-                                vacation.status === 'approved' ? 'bg-green-50 text-green-700 border-green-200' :
-                                vacation.status === 'rejected' ? 'bg-red-50 text-red-700 border-red-200' :
-                                'bg-amber-50 text-amber-700 border-amber-200'
-                              }`}>
-                                {vacation.status}
-                              </Badge>
+                              <div className="flex flex-col items-start gap-1">
+                                <Badge className={`capitalize text-[10px] ${
+                                  vacation.status === 'approved' ? 'bg-green-50 text-green-700 border-green-200' :
+                                  vacation.status === 'rejected' ? 'bg-red-50 text-red-700 border-red-200' :
+                                  'bg-amber-50 text-amber-700 border-amber-200'
+                                }`}>
+                                  {vacation.status}
+                                </Badge>
+                                {vacation.status === 'approved' && vacation.emailSent && (
+                                  <span 
+                                    className="text-[10px] text-emerald-600 flex items-center gap-0.5 font-medium" 
+                                    title={vacation.emailSentAt ? `Confirmation email dispatched ${new Date(vacation.emailSentAt).toLocaleDateString()}` : 'Confirmation email sent'}
+                                  >
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                    <span>Emailed</span>
+                                  </span>
+                                )}
+                              </div>
                             </TableCell>
                             <TableCell className="text-right">
-                              <div className="flex justify-end gap-2">
+                              <div className="flex justify-end items-center gap-1.5">
                                 {isAdmin && (
                                   <Button 
                                     variant="ghost" 
                                     size="sm" 
-                                    className="text-slate-400 hover:text-blue-600"
+                                    className="text-slate-400 hover:text-blue-600 h-8 w-8 p-0"
                                     onClick={() => handleEditVacation(vacation)}
                                   >
                                     <Edit2 className="w-4 h-4" />
@@ -5695,7 +5961,7 @@ function AppContent() {
                                     <Button 
                                       variant="ghost" 
                                       size="sm" 
-                                      className="text-green-600 hover:bg-green-50"
+                                      className="text-green-600 hover:bg-green-50 text-xs px-2.5 h-8 font-semibold"
                                       onClick={() => handleUpdateVacationStatus(vacation.id, 'approved')}
                                     >
                                       Approve
@@ -5703,18 +5969,30 @@ function AppContent() {
                                     <Button 
                                       variant="ghost" 
                                       size="sm" 
-                                      className="text-red-500 hover:bg-red-50"
+                                      className="text-red-500 hover:bg-red-50 text-xs px-2.5 h-8 font-semibold"
                                       onClick={() => handleUpdateVacationStatus(vacation.id, 'rejected')}
                                     >
                                       Reject
                                     </Button>
                                   </>
                                 )}
+                                {isAdmin && vacation.status === 'approved' && (
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className="text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 text-xs px-2 h-8 gap-1 font-medium"
+                                    title="Resend approval notification email to staff member"
+                                    onClick={() => handleResendVacationApprovalEmail(vacation)}
+                                  >
+                                    <Mail className="w-3.5 h-3.5 text-emerald-600" />
+                                    <span className="hidden md:inline text-[11px] text-emerald-700">Resend Email</span>
+                                  </Button>
+                                )}
                                 {isAdmin && (
                                   <Button 
                                     variant="ghost" 
                                     size="sm" 
-                                    className="text-slate-400 hover:text-red-600"
+                                    className="text-slate-400 hover:text-red-600 h-8 w-8 p-0"
                                     onClick={() => handleRemoveVacation(vacation.id)}
                                   >
                                     <Trash2 className="w-4 h-4" />
