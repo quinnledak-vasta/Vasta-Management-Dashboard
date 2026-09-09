@@ -69,6 +69,7 @@
         "userId": { "type": "string" },
         "userName": { "type": "string" },
         "userEmail": { "type": "string", "format": "email" },
+        "location": { "type": "string", "description": "Location/facility for the time-off request" },
         "startDate": { "type": "string", "format": "date" },
         "endDate": { "type": "string", "format": "date" },
         "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
@@ -77,7 +78,8 @@
         "approvedBy": { "type": "string" },
         "approvedAt": { "type": "string", "format": "date-time" },
         "emailSent": { "type": "boolean" },
-        "emailSentAt": { "type": "string", "format": "date-time" }
+        "emailSentAt": { "type": "string", "format": "date-time" },
+        "managerAlertsSentTo": { "type": "array", "items": { "type": "string" }, "description": "Emails of managers notified" }
       },
       "required": ["userId", "startDate", "endDate", "status", "type"]
     },

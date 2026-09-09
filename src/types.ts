@@ -159,6 +159,7 @@ export interface VacationRequest {
   userId: string;
   userName: string;
   userEmail?: string;
+  location?: Location | string;
   startDate: string;
   endDate: string;
   status: VacationStatus;
@@ -171,6 +172,7 @@ export interface VacationRequest {
   approvedAt?: string;
   emailSent?: boolean;
   emailSentAt?: string;
+  managerAlertsSentTo?: string[];
 }
 
 export interface InventoryReportItem {

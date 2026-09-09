@@ -424,6 +424,7 @@ function AppContent() {
 
   const [newVacation, setNewVacation] = useState({
     userId: '',
+    location: 'Dorset Street' as Location,
     startDate: new Date().toISOString().split('T')[0],
     endDate: new Date().toISOString().split('T')[0],
     type: 'vacation' as const,
@@ -826,6 +827,340 @@ function AppContent() {
         success: false,
         error: err?.message || 'Failed to dispatch email.'
       };
+    }
+  };
+
+  // Helper to normalize location names to official values
+  const normalizeLocationName = (loc?: string): Location | string => {
+    if (!loc) return '';
+    const clean = loc.trim().toLowerCase();
+    if (clean.includes('dorset')) return 'Dorset Street';
+    if (clean.includes('shelburne')) return 'Shelburne Road';
+    if (clean.includes('palm') || clean.includes('wpb') || clean.includes('west palm')) return 'West Palm Beach';
+    return loc.trim();
+  };
+
+  interface VacationAlertRecipient {
+    name: string;
+    email: string;
+    role: 'owner' | 'manager' | 'owner_and_manager';
+    label: string;
+  }
+
+  // Helper to find location managers and owners for vacation requests
+  const getVacationAlertRecipients = async (location: string, requesterId?: string): Promise<{
+    allRecipients: VacationAlertRecipient[];
+    managers: VacationAlertRecipient[];
+    owners: VacationAlertRecipient[];
+    targetLocation: string;
+  }> => {
+    const normLocation = normalizeLocationName(location);
+    const PRIMARY_OWNER_EMAIL = 'quinnledak@vastasports.com';
+
+    const recipientMap = new Map<string, VacationAlertRecipient>();
+    const managers: VacationAlertRecipient[] = [];
+    const owners: VacationAlertRecipient[] = [];
+
+    // 1. Identify Location Managers from in-memory trainers state
+    trainers.forEach(t => {
+      const tLoc = normalizeLocationName(t.location);
+      const tEmail = (t.email || '').trim().toLowerCase();
+      if (!tEmail || !tEmail.includes('@')) return;
+
+      if (t.role === 'admin' && tLoc === normLocation) {
+        const isOwnerEmail = tEmail === PRIMARY_OWNER_EMAIL;
+        const rec: VacationAlertRecipient = {
+          name: t.name || 'Location Manager',
+          email: tEmail,
+          role: isOwnerEmail ? 'owner_and_manager' : 'manager',
+          label: isOwnerEmail ? `Owner & Location Manager (${normLocation})` : `Location Manager (${normLocation})`
+        };
+        if (!managers.some(m => m.email === tEmail)) {
+          managers.push(rec);
+        }
+        recipientMap.set(tEmail, rec);
+      }
+    });
+
+    // 2. Direct Firestore fallback if no location manager was found in state
+    if (managers.length === 0) {
+      try {
+        const usersQuery = query(collection(db, 'users'), where('role', '==', 'admin'));
+        const usersSnap = await getDocs(usersQuery);
+        usersSnap.docs.forEach(docSnap => {
+          const d = docSnap.data() as any;
+          const dLoc = normalizeLocationName(d.location);
+          const dEmail = (d.email || '').trim().toLowerCase();
+          if (dEmail && dEmail.includes('@') && dLoc === normLocation && !recipientMap.has(dEmail)) {
+            const isOwnerEmail = dEmail === PRIMARY_OWNER_EMAIL;
+            const rec: VacationAlertRecipient = {
+              name: d.name || 'Location Manager',
+              email: dEmail,
+              role: isOwnerEmail ? 'owner_and_manager' : 'manager',
+              label: isOwnerEmail ? `Owner & Location Manager (${normLocation})` : `Location Manager (${normLocation})`
+            };
+            managers.push(rec);
+            recipientMap.set(dEmail, rec);
+          }
+        });
+      } catch (err) {
+        console.warn("Could not query users collection for location admins:", err);
+      }
+    }
+
+    // 3. Identify Owners
+    trainers.forEach(t => {
+      const tEmail = (t.email || '').trim().toLowerCase();
+      if (!tEmail || !tEmail.includes('@')) return;
+
+      if (t.role === 'owner' || tEmail === PRIMARY_OWNER_EMAIL) {
+        const existing = recipientMap.get(tEmail);
+        const rec: VacationAlertRecipient = {
+          name: t.name || 'Quinn Ledak (Owner)',
+          email: tEmail,
+          role: existing ? 'owner_and_manager' : 'owner',
+          label: existing ? `Owner & Location Manager (${normLocation})` : 'Owner'
+        };
+        if (!owners.some(o => o.email === tEmail)) {
+          owners.push(rec);
+        }
+        recipientMap.set(tEmail, rec);
+      }
+    });
+
+    // 4. Guaranteed Owner Fallback: Quinn Ledak must always be notified
+    if (!recipientMap.has(PRIMARY_OWNER_EMAIL)) {
+      const ownerFallback: VacationAlertRecipient = {
+        name: 'Quinn Ledak',
+        email: PRIMARY_OWNER_EMAIL,
+        role: 'owner',
+        label: 'Owner'
+      };
+      owners.push(ownerFallback);
+      recipientMap.set(PRIMARY_OWNER_EMAIL, ownerFallback);
+    }
+
+    return {
+      allRecipients: Array.from(recipientMap.values()),
+      managers,
+      owners,
+      targetLocation: normLocation
+    };
+  };
+
+  // Helper to dispatch vacation request notification email to Location Manager and Owner
+  const sendVacationRequestAlert = async (vacation: VacationRequest): Promise<{
+    success: boolean;
+    recipientsCount: number;
+    recipientEmails: string[];
+    managerNames: string[];
+    ownerNames: string[];
+    targetLocation: string;
+    error?: string;
+  }> => {
+    try {
+      const matchingTrainer = trainers.find(t => t.id === vacation.userId);
+      const targetLoc = normalizeLocationName(
+        vacation.location || matchingTrainer?.location || 'Dorset Street'
+      ) as string;
+
+      const { allRecipients, managers, owners } = await getVacationAlertRecipients(targetLoc, vacation.userId);
+
+      if (allRecipients.length === 0) {
+        return {
+          success: false,
+          recipientsCount: 0,
+          recipientEmails: [],
+          managerNames: [],
+          ownerNames: [],
+          targetLocation: targetLoc,
+          error: 'No recipients (location manager or owner) found.'
+        };
+      }
+
+      // Safe date formatting
+      let formattedDates = `${vacation.startDate} to ${vacation.endDate}`;
+      try {
+        const s = parseISO(vacation.startDate);
+        const e = parseISO(vacation.endDate);
+        formattedDates = `${format(s, 'EEE, MMM d, yyyy')} – ${format(e, 'EEE, MMM d, yyyy')}`;
+      } catch (dateErr) {
+        console.warn("Error formatting vacation request dates:", dateErr);
+      }
+
+      const baseUrl = window.location.origin || 'https://vasta-dashboard.web.app';
+      const approvalLink = `${baseUrl}/?tab=vacations`;
+      const approveLink = `${baseUrl}/?tab=vacations&action=approve&vacationId=${vacation.id}`;
+      const rejectLink = `${baseUrl}/?tab=vacations&action=reject&vacationId=${vacation.id}`;
+
+      const managerSummaryText = managers.length > 0 
+        ? managers.map(m => `${m.name} (${m.email})`).join(', ')
+        : 'None assigned yet';
+      const ownerSummaryText = owners.map(o => `${o.name} (${o.email})`).join(', ');
+
+      const successfulEmails: string[] = [];
+
+      for (const recipient of allRecipients) {
+        try {
+          const typeLabel = (vacation.type || 'vacation').charAt(0).toUpperCase() + (vacation.type || 'vacation').slice(1);
+          await addDoc(collection(db, 'mail'), {
+            to: recipient.email,
+            message: {
+              subject: `🏖️ Vacation Request: ${vacation.userName} (${targetLoc})`,
+              html: `
+                <div style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 25px; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+                  <div style="border-bottom: 2px solid #dc2626; padding-bottom: 16px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                      <span style="font-weight: 800; font-size: 20px; color: #dc2626; letter-spacing: -0.5px;">VASTA</span>
+                      <span style="font-size: 14px; color: #64748b; margin-left: 8px; font-weight: 500;">Performance Training</span>
+                    </div>
+                    <span style="background-color: #fef2f2; color: #dc2626; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; border: 1px solid #fecaca; text-transform: uppercase; letter-spacing: 0.5px;">
+                      Time Off Request
+                    </span>
+                  </div>
+
+                  <h2 style="color: #0f172a; font-size: 18px; margin: 0 0 12px 0; font-weight: 700;">
+                    New Vacation Request Submitted
+                  </h2>
+                  <p style="font-size: 14px; line-height: 1.5; color: #334155; margin: 0 0 16px 0;">
+                    Hi <strong>${recipient.name}</strong> (${recipient.label}),
+                  </p>
+                  <p style="font-size: 14px; line-height: 1.5; color: #334155; margin: 0 0 20px 0;">
+                    <strong>${vacation.userName}</strong> has submitted a time-off request for the <strong>${targetLoc}</strong> facility. Please review the details below:
+                  </p>
+                  
+                  <div style="background-color: #f8fafc; padding: 20px; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 24px;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                      <tr>
+                        <td style="padding: 6px 0; color: #64748b; width: 38%; font-weight: 500;">Staff Member:</td>
+                        <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${vacation.userName}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Facility / Location:</td>
+                        <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${targetLoc}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Requested Period:</td>
+                        <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${formattedDates}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Total Duration:</td>
+                        <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${vacation.totalDays || 1} day(s) (${vacation.hours || 8} hrs/day)</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Leave Type:</td>
+                        <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">
+                          <span style="background-color: #e2e8f0; color: #334155; padding: 2px 8px; border-radius: 4px; font-size: 12px;">${typeLabel}</span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 6px 0; color: #64748b; font-weight: 500; vertical-align: top;">Requester Notes:</td>
+                        <td style="padding: 6px 0; color: #334155; font-style: italic;">
+                          ${vacation.notes ? `"${vacation.notes}"` : '<span style="color: #94a3b8;">None provided</span>'}
+                        </td>
+                      </tr>
+                    </table>
+                  </div>
+
+                  <div style="background-color: #f1f5f9; padding: 12px 16px; border-radius: 8px; font-size: 12px; color: #475569; margin-bottom: 24px; border-left: 4px solid #3b82f6;">
+                    <p style="margin: 0 0 4px 0;"><strong>Notification Routing:</strong></p>
+                    <p style="margin: 0 0 2px 0;">• Location Manager(s): ${managerSummaryText}</p>
+                    <p style="margin: 0;">• Owner(s): ${ownerSummaryText}</p>
+                  </div>
+
+                  <p style="font-size: 14px; line-height: 1.5; color: #334155; margin-bottom: 16px; font-weight: 600; text-align: center;">
+                    Take Immediate Action:
+                  </p>
+                  
+                  <div style="text-align: center; margin: 20px 0;">
+                    <a href="${approveLink}" style="display: inline-block; background-color: #16a34a; color: #ffffff; text-decoration: none; padding: 13px 26px; font-weight: bold; border-radius: 8px; font-size: 14px; margin-right: 12px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(22, 163, 74, 0.2);">
+                      ✔ Approve Request
+                    </a>
+                    <a href="${rejectLink}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 13px 26px; font-weight: bold; border-radius: 8px; font-size: 14px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(220, 38, 38, 0.2);">
+                      ✘ Reject Request
+                    </a>
+                  </div>
+
+                  <p style="font-size: 12px; color: #64748b; text-align: center; margin: 10px 0 24px 0; font-style: italic;">
+                    Clicking either action will prompt you to securely sign in (if needed) and instantly process the request and notify the staff member.
+                  </p>
+
+                  <div style="text-align: center; border-top: 1px solid #f1f5f9; padding-top: 16px;">
+                    <a href="${approvalLink}" style="font-size: 13px; color: #dc2626; text-decoration: none; font-weight: 600;">
+                      View Full Staff Schedule & Vacations Calendar →
+                    </a>
+                  </div>
+                  
+                  <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0 15px 0;" />
+                  <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
+                    This is an automated operational notification from the Vasta Personal Training System.
+                  </p>
+                </div>
+              `
+            }
+          });
+          successfulEmails.push(recipient.email);
+        } catch (mailErr) {
+          console.error(`Error sending vacation alert to ${recipient.email}:`, mailErr);
+        }
+      }
+
+      // Record manager alerts on the vacation document
+      if (successfulEmails.length > 0) {
+        try {
+          await updateDoc(doc(db, 'vacations', vacation.id), {
+            location: targetLoc,
+            managerAlertsSentTo: successfulEmails
+          });
+        } catch (updErr) {
+          console.warn("Could not record managerAlertsSentTo on vacation document:", updErr);
+        }
+      }
+
+      return {
+        success: successfulEmails.length > 0,
+        recipientsCount: successfulEmails.length,
+        recipientEmails: successfulEmails,
+        managerNames: managers.map(m => m.name),
+        ownerNames: owners.map(o => o.name),
+        targetLocation: targetLoc,
+        error: successfulEmails.length === 0 ? 'Failed to dispatch emails to recipients.' : undefined
+      };
+    } catch (err: any) {
+      console.error("Error dispatching vacation request alerts:", err);
+      return {
+        success: false,
+        recipientsCount: 0,
+        recipientEmails: [],
+        managerNames: [],
+        ownerNames: [],
+        targetLocation: '',
+        error: err?.message || 'Unexpected failure while sending alerts.'
+      };
+    }
+  };
+
+  const handleResendManagerAlert = async (vacation: VacationRequest) => {
+    if (!isAdmin) {
+      toast.error("Only administrators can resend manager alerts.");
+      return;
+    }
+    const toastId = toast.loading("Resending vacation alert to Location Manager and Owner...");
+    try {
+      const result = await sendVacationRequestAlert(vacation);
+      if (result.success) {
+        let msg = `Vacation alert re-sent to Owner (${result.ownerNames.join(', ')})`;
+        if (result.managerNames.length > 0) {
+          msg += ` and Location Manager (${result.managerNames.join(', ')})`;
+        } else {
+          msg += `. (Note: No manager currently assigned to ${result.targetLocation})`;
+        }
+        toast.success(msg, { id: toastId, duration: 6000 });
+      } else {
+        toast.error(`Could not resend alert: ${result.error}`, { id: toastId });
+      }
+    } catch (err: any) {
+      toast.error(`Failed to resend alert: ${err?.message || 'Unknown error'}`, { id: toastId });
     }
   };
 
@@ -2934,6 +3269,7 @@ function AppContent() {
           userEmail: memberEmail,
           startDate: newVacation.startDate,
           endDate: newVacation.endDate,
+          location: newVacation.location || (selectedTrainer?.location as Location) || 'Dorset Street',
           type: newVacation.type,
           hours: Number(newVacation.hours) || 8,
           notes: newVacation.notes,
@@ -2943,10 +3279,12 @@ function AppContent() {
         await updateDoc(doc(db, 'vacations', editingVacationId), vacationData);
         toast.success("Vacation request updated");
       } else {
-        const vacationData = {
+        const vacationLocation = newVacation.location || (selectedTrainer?.location as Location) || 'Dorset Street';
+        const vacationData: any = {
           userId: newVacation.userId,
           userName: selectedTrainer?.name || 'Unknown',
           userEmail: memberEmail,
+          location: vacationLocation,
           startDate: newVacation.startDate,
           endDate: newVacation.endDate,
           status: 'pending' as VacationStatus,
@@ -2957,77 +3295,33 @@ function AppContent() {
           totalDays
         };
         const vacationDocRef = await addDoc(collection(db, 'vacations'), vacationData);
-        toast.success("Vacation request submitted");
+        const createdVacation: VacationRequest = {
+          id: vacationDocRef.id,
+          ...vacationData
+        };
 
-        // Send email alerts to location admins and owners
-        try {
-          const recipients = trainers.filter(t => 
-            (t.role === 'admin' && selectedTrainer?.location && t.location?.trim().toLowerCase() === selectedTrainer.location.trim().toLowerCase()) || 
-            t.role === 'owner' ||
-            t.email?.toLowerCase().trim() === 'quinnledak@vastasports.com'
-          );
-
-          const baseUrl = window.location.origin || 'https://vasta-dashboard.web.app';
-          const approvalLink = `${baseUrl}/?tab=vacations`;
-          const approveLink = `${baseUrl}/?tab=vacations&action=approve&vacationId=${vacationDocRef.id}`;
-          const rejectLink = `${baseUrl}/?tab=vacations&action=reject&vacationId=${vacationDocRef.id}`;
-
-          for (const recipient of recipients) {
-            if (recipient.email) {
-              await addDoc(collection(db, 'mail'), {
-                to: recipient.email,
-                message: {
-                  subject: `New Vacation Request: ${selectedTrainer?.name}`,
-                  html: `
-                    <div style="font-family: sans-serif; padding: 25px; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
-                      <div style="text-align: center; margin-bottom: 20px;">
-                        <span style="font-weight: bold; font-size: 20px; color: #dc2626; letter-spacing: -0.5px;">Vasta Personal Training</span>
-                      </div>
-                      <h2 style="color: #0f172a; font-size: 18px; margin-top: 0; border-bottom: 1px solid #f1f5f9; padding-bottom: 12px; font-weight: 700;">New Vacation Request</h2>
-                      <p style="font-size: 14px; line-height: 1.5; color: #334155;">Hi <strong>${recipient.name}</strong>,</p>
-                      <p style="font-size: 14px; line-height: 1.5; color: #334155;"><strong>${selectedTrainer?.name}</strong> has submitted a new vacation request for your review.</p>
-                      
-                      <div style="background-color: #f8fafc; padding: 18px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
-                        <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Staff Member:</strong> ${selectedTrainer?.name}</p>
-                        <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Location:</strong> ${selectedTrainer?.location || 'N/A'}</p>
-                        <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Dates:</strong> ${new Date(vacationData.startDate).toLocaleDateString()} to ${new Date(vacationData.endDate).toLocaleDateString()}</p>
-                        <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Type:</strong> ${vacationData.type.charAt(0).toUpperCase() + vacationData.type.slice(1)}</p>
-                        <p style="margin: 0; font-size: 13px; color: #475569;"><strong style="color: #0f172a;">Notes:</strong> ${vacationData.notes || 'No notes provided.'}</p>
-                      </div>
-
-                      <p style="font-size: 14px; line-height: 1.5; color: #334155; margin-bottom: 20px;">
-                        Review and process this request instantly by clicking one of the buttons below:
-                      </p>
-                      
-                      <div style="text-align: center; margin: 24px 0;">
-                        <a href="${approveLink}" style="display: inline-block; background-color: #16a34a; color: #ffffff; text-decoration: none; padding: 12px 24px; font-weight: bold; border-radius: 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(22,163,74,0.15); margin-right: 12px; margin-bottom: 10px;">✔ Approve Request</a>
-                        <a href="${rejectLink}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 24px; font-weight: bold; border-radius: 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(220,38,38,0.15); margin-bottom: 10px;">✘ Reject Request</a>
-                      </div>
-
-                      <p style="font-size: 12px; color: #64748b; text-align: center; margin-top: 10px; font-style: italic;">
-                        Clicking either option will prompt you to securely sign in (if not already) and auto-execute the action directly on the dashboard.
-                      </p>
-
-                      <p style="font-size: 11px; color: #94a3b8; line-height: 1.4; margin-top: 25px; border-top: 1px solid #f1f5f9; padding-top: 15px;">
-                        Or, view all requests in the dashboard:<br />
-                        <a href="${approvalLink}" style="color: #dc2626; word-break: break-all;">${approvalLink}</a>
-                      </p>
-                      
-                      <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
-                      <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
-                    </div>
-                  `
-                }
-              });
-            }
+        // Dispatch alert email to Location Manager(s) and Owner(s)
+        const alertRes = await sendVacationRequestAlert(createdVacation);
+        if (alertRes.success) {
+          if (alertRes.managerNames.length > 0) {
+            toast.success(
+              `Vacation request logged! Notification emailed to Location Manager (${alertRes.managerNames.join(', ')}) and Owner (${alertRes.ownerNames.join(', ')}).`,
+              { duration: 7000 }
+            );
+          } else {
+            toast.success(
+              `Vacation request logged! Notification emailed to Owner (${alertRes.ownerNames.join(', ')}). (Note: No location manager is currently assigned to ${alertRes.targetLocation}).`,
+              { duration: 7000 }
+            );
           }
-        } catch (emailError) {
-          console.error("Error sending vacation alerts:", emailError);
+        } else {
+          toast.warning(`Vacation request saved, but alert email could not be sent: ${alertRes.error || 'Check network or mail settings'}`);
         }
       }
 
       setNewVacation({ 
         userId: '', 
+        location: 'Dorset Street',
         startDate: new Date().toISOString().split('T')[0], 
         endDate: new Date().toISOString().split('T')[0], 
         type: 'vacation', 
@@ -3048,6 +3342,7 @@ function AppContent() {
     }
     setNewVacation({
       userId: vacation.userId,
+      location: (vacation.location as Location) || 'Dorset Street',
       startDate: vacation.startDate,
       endDate: vacation.endDate,
       type: vacation.type,
@@ -3254,17 +3549,17 @@ function AppContent() {
     }
   };
 
-  // Helper to reliably find all location managers and owners for restock notifications
-  const getRestockRecipients = (location: string) => {
-    const normLocation = (location || '').trim().toLowerCase();
-    const PRIMARY_OWNER_EMAIL = 'quinnledak@vastasports.com';
+  interface RestockRecipient {
+    name: string;
+    email: string;
+    role: 'owner' | 'manager' | 'owner_and_manager';
+    label: string;
+  }
 
-    interface RestockRecipient {
-      name: string;
-      email: string;
-      role: 'owner' | 'manager' | 'owner_and_manager';
-      label: string;
-    }
+  // Synchronous lookup for UI preview
+  const getRestockRecipientsSync = (location: string) => {
+    const normLocation = normalizeLocationName(location);
+    const PRIMARY_OWNER_EMAIL = 'quinnledak@vastasports.com';
 
     const recipientMap = new Map<string, RestockRecipient>();
     const managers: RestockRecipient[] = [];
@@ -3272,7 +3567,7 @@ function AppContent() {
 
     // 1. Identify Location Managers (Admins assigned to this specific facility)
     trainers.forEach(t => {
-      const tLoc = (t.location || '').trim().toLowerCase();
+      const tLoc = normalizeLocationName(t.location);
       const tEmail = (t.email || '').trim().toLowerCase();
       if (t.role === 'admin' && tLoc === normLocation && tEmail) {
         const isOwnerEmail = tEmail === PRIMARY_OWNER_EMAIL;
@@ -3280,7 +3575,7 @@ function AppContent() {
           name: t.name || 'Location Manager',
           email: tEmail,
           role: isOwnerEmail ? 'owner_and_manager' : 'manager',
-          label: isOwnerEmail ? `Owner & Location Manager (${t.location || location})` : `Location Manager (${t.location || location})`
+          label: isOwnerEmail ? `Owner & Location Manager (${normLocation})` : `Location Manager (${normLocation})`
         };
         if (!managers.some(m => m.email === tEmail)) {
           managers.push(rec);
@@ -3298,7 +3593,7 @@ function AppContent() {
           name: t.name || 'Quinn Ledak (Owner)',
           email: tEmail,
           role: existing ? 'owner_and_manager' : 'owner',
-          label: existing ? `Owner & Location Manager (${t.location || location})` : 'Owner'
+          label: existing ? `Owner & Location Manager (${normLocation})` : 'Owner'
         };
         if (!owners.some(o => o.email === tEmail)) {
           owners.push(rec);
@@ -3326,6 +3621,44 @@ function AppContent() {
     };
   };
 
+  // Async version with direct Firestore fallback query
+  const getRestockRecipients = async (location: string) => {
+    const syncRes = getRestockRecipientsSync(location);
+    const normLocation = normalizeLocationName(location);
+    const PRIMARY_OWNER_EMAIL = 'quinnledak@vastasports.com';
+
+    if (syncRes.managers.length === 0) {
+      try {
+        const usersQuery = query(collection(db, 'users'), where('role', '==', 'admin'));
+        const usersSnap = await getDocs(usersQuery);
+        const recipientMap = new Map<string, RestockRecipient>();
+        syncRes.allRecipients.forEach(r => recipientMap.set(r.email, r));
+
+        usersSnap.docs.forEach(docSnap => {
+          const d = docSnap.data() as any;
+          const dLoc = normalizeLocationName(d.location);
+          const dEmail = (d.email || '').trim().toLowerCase();
+          if (dEmail && dEmail.includes('@') && dLoc === normLocation && !recipientMap.has(dEmail)) {
+            const isOwnerEmail = dEmail === PRIMARY_OWNER_EMAIL;
+            const rec: RestockRecipient = {
+              name: d.name || 'Location Manager',
+              email: dEmail,
+              role: isOwnerEmail ? 'owner_and_manager' : 'manager',
+              label: isOwnerEmail ? `Owner & Location Manager (${normLocation})` : `Location Manager (${normLocation})`
+            };
+            syncRes.managers.push(rec);
+            recipientMap.set(dEmail, rec);
+          }
+        });
+        syncRes.allRecipients = Array.from(recipientMap.values());
+      } catch (err) {
+        console.warn("Could not query users collection for restock admins:", err);
+      }
+    }
+
+    return syncRes;
+  };
+
   const handleSubmitRestockRequest = async () => {
     if (!user || !selectedRestockLocation) {
       toast.error("Please select a location");
@@ -3347,7 +3680,7 @@ function AppContent() {
       return;
     }
 
-    const { allRecipients, managers, owners } = getRestockRecipients(selectedRestockLocation);
+    const { allRecipients, managers, owners } = await getRestockRecipients(selectedRestockLocation);
 
     if (allRecipients.length === 0) {
       toast.error("Could not determine any recipients for this request.");
@@ -4371,7 +4704,7 @@ function AppContent() {
                   </div>
 
                   {selectedRestockLocation && (() => {
-                    const { managers, owners } = getRestockRecipients(selectedRestockLocation);
+                    const { managers, owners } = getRestockRecipientsSync(selectedRestockLocation);
                     return (
                       <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-700 space-y-2">
                         <div className="flex items-center gap-1.5 font-semibold text-slate-900">
@@ -5696,20 +6029,26 @@ function AppContent() {
                     <Dialog open={isNewVacationOpen} onOpenChange={(open) => {
                     setIsNewVacationOpen(open);
                       if (open) {
-                      if (!editingVacationId && user) {
-                        setNewVacation(prev => ({ ...prev, userId: user.id }));
+                        if (!editingVacationId && user) {
+                          const matchingTrainer = trainers.find(t => t.id === user.id);
+                          setNewVacation(prev => ({ 
+                            ...prev, 
+                            userId: user.id,
+                            location: (matchingTrainer?.location as Location) || prev.location || 'Dorset Street'
+                          }));
+                        }
+                      } else {
+                        setEditingVacationId(null);
+                        setNewVacation({ 
+                          userId: '', 
+                          location: 'Dorset Street',
+                          startDate: new Date().toISOString().split('T')[0], 
+                          endDate: new Date().toISOString().split('T')[0], 
+                          type: 'vacation', 
+                          hours: 8,
+                          notes: '' 
+                        });
                       }
-                    } else {
-                      setEditingVacationId(null);
-                      setNewVacation({ 
-                        userId: '', 
-                        startDate: new Date().toISOString().split('T')[0], 
-                        endDate: new Date().toISOString().split('T')[0], 
-                        type: 'vacation', 
-                        hours: 8,
-                        notes: '' 
-                      });
-                    }
                   }}>
                     <DialogTrigger
                       render={
@@ -5719,7 +6058,7 @@ function AppContent() {
                         </Button>
                       }
                     />
-                    <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
+                    <DialogContent className="sm:max-w-[440px] max-h-[90vh] overflow-y-auto">
                       <DialogHeader>
                         <DialogTitle>{editingVacationId ? 'Edit Vacation Request' : 'Log Vacation Request'}</DialogTitle>
                         <DialogDescription>
@@ -5731,7 +6070,14 @@ function AppContent() {
                           <Label>Team Member</Label>
                           <Select 
                             value={newVacation.userId} 
-                            onValueChange={val => setNewVacation({...newVacation, userId: val})}
+                            onValueChange={val => {
+                              const matchingTrainer = trainers.find(t => t.id === val);
+                              setNewVacation(prev => ({
+                                ...prev, 
+                                userId: val,
+                                location: (matchingTrainer?.location as Location) || prev.location || 'Dorset Street'
+                              }));
+                            }}
                             disabled={!!editingVacationId}
                           >
                             <SelectTrigger>
@@ -5751,6 +6097,53 @@ function AppContent() {
                             </SelectContent>
                           </Select>
                         </div>
+
+                        <div className="grid gap-2">
+                          <Label>Facility / Location</Label>
+                          <Select 
+                            value={newVacation.location || 'Dorset Street'} 
+                            onValueChange={val => setNewVacation(prev => ({ ...prev, location: val as Location }))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Dorset Street">Dorset Street</SelectItem>
+                              <SelectItem value="Shelburne Road">Shelburne Road</SelectItem>
+                              <SelectItem value="West Palm Beach">West Palm Beach</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-[11px] text-slate-500">
+                            Alert email will route directly to the Location Manager for this facility and the Owner.
+                          </p>
+                        </div>
+
+                        {/* Live Routing Indicator */}
+                        {(() => {
+                          const targetLoc = normalizeLocationName(
+                            newVacation.location || trainers.find(t => t.id === newVacation.userId)?.location || 'Dorset Street'
+                          );
+                          const matchingManagers = trainers.filter(t => t.role === 'admin' && normalizeLocationName(t.location) === targetLoc && t.email);
+                          return (
+                            <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5 text-xs space-y-1">
+                              <div className="font-semibold text-slate-700 flex items-center gap-1.5">
+                                <Mail className="w-3.5 h-3.5 text-red-600" />
+                                <span>Notification Recipients for {targetLoc}:</span>
+                              </div>
+                              <div className="pl-5 text-[11px] space-y-0.5 text-slate-600">
+                                <div>
+                                  <strong className="text-slate-700">Location Manager:</strong>{' '}
+                                  {matchingManagers.length > 0 
+                                    ? matchingManagers.map(m => `${m.name} (${m.email})`).join(', ') 
+                                    : <span className="text-amber-700 font-medium italic">None assigned yet (routes to Owner)</span>}
+                                </div>
+                                <div>
+                                  <strong className="text-slate-700">Owner:</strong> Quinn Ledak (quinnledak@vastasports.com)
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                         <div className="grid grid-cols-2 gap-4">
                           <div className="grid gap-2">
                             <Label>Start Date</Label>
@@ -5913,7 +6306,14 @@ function AppContent() {
                           <TableRow key={vacation.id} className="hover:bg-slate-50/50 transition-colors">
                             <TableCell className="font-bold text-slate-900">
                               <div>
-                                {vacation.userName}
+                                <div className="flex items-center gap-1.5">
+                                  <span>{vacation.userName}</span>
+                                  {vacation.location && (
+                                    <span className="text-[10px] text-slate-500 font-medium px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200">
+                                      {vacation.location}
+                                    </span>
+                                  )}
+                                </div>
                                 {vacation.hours && <p className="text-[10px] font-normal text-slate-400">{vacation.hours} hrs/day</p>}
                               </div>
                             </TableCell>
@@ -5933,6 +6333,15 @@ function AppContent() {
                                 }`}>
                                   {vacation.status}
                                 </Badge>
+                                {vacation.status === 'pending' && vacation.managerAlertsSentTo && vacation.managerAlertsSentTo.length > 0 && (
+                                  <span 
+                                    className="text-[10px] text-blue-600 flex items-center gap-0.5 font-medium" 
+                                    title={`Manager/Owner alert sent to: ${vacation.managerAlertsSentTo.join(', ')}`}
+                                  >
+                                    <Mail className="w-2.5 h-2.5 text-blue-600" />
+                                    <span>Alerted</span>
+                                  </span>
+                                )}
                                 {vacation.status === 'approved' && vacation.emailSent && (
                                   <span 
                                     className="text-[10px] text-emerald-600 flex items-center gap-0.5 font-medium" 
@@ -5973,6 +6382,16 @@ function AppContent() {
                                       onClick={() => handleUpdateVacationStatus(vacation.id, 'rejected')}
                                     >
                                       Reject
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-slate-400 hover:text-blue-700 hover:bg-blue-50 text-xs px-2 h-8 gap-1 font-medium"
+                                      title="Resend request alert email to Location Manager and Owner"
+                                      onClick={() => handleResendManagerAlert(vacation)}
+                                    >
+                                      <Mail className="w-3.5 h-3.5 text-blue-600" />
+                                      <span className="hidden lg:inline text-[11px] text-blue-700">Resend Alert</span>
                                     </Button>
                                   </>
                                 )}

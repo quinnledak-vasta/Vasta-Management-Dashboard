@@ -114,14 +114,6 @@ export function TrainerCheckInPanel({
 
     const today = new Date();
     const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
-    
-    const getOrdinalSuffix = (num: number) => {
-      const j = num % 10, k = num % 100;
-      if (j === 1 && k !== 11) return `${num}st`;
-      if (j === 2 && k !== 12) return `${num}nd`;
-      if (j === 3 && k !== 13) return `${num}rd`;
-      return `${num}th`;
-    };
 
     const getCycleDetails = (year: number) => {
       const annivUtc = new Date(Date.UTC(year, annivMonth - 1, annivDay));
@@ -249,20 +241,27 @@ export function TrainerCheckInPanel({
   // Compile list of tracked years to display
   const yearsToTrack = (() => {
     const baseYears = [currentYear - 2, currentYear - 1, currentYear, currentYear + 1];
-    if (anniversaryDetails?.startYear && anniversaryDetails.startYear < currentYear - 2) {
+    if (anniversaryDetails?.startYear && anniversaryDetails.startYear >= 1990 && anniversaryDetails.startYear < currentYear - 2) {
       baseYears.push(anniversaryDetails.startYear);
     }
     (trainer.annualReviews || []).forEach(r => {
-      if (!baseYears.includes(r.year)) {
+      // Exclude erroneous 55th year milestone entries
+      const milestone = (r.anniversaryMilestone || '').toLowerCase();
+      if (milestone.includes('55th') || (r.year === 2027 && milestone.includes('55'))) {
+        return;
+      }
+      if (r.year >= 1990 && !baseYears.includes(r.year)) {
         baseYears.push(r.year);
       }
     });
     (trainer.completedAnnualReviewYears || []).forEach(y => {
-      if (!baseYears.includes(y)) {
+      if (y >= 1990 && !baseYears.includes(y)) {
         baseYears.push(y);
       }
     });
-    return Array.from(new Set(baseYears)).sort((a, b) => b - a);
+    return Array.from(new Set(baseYears))
+      .filter(y => y >= 1990 && y <= currentYear + 2)
+      .sort((a, b) => b - a);
   })();
 
   return (

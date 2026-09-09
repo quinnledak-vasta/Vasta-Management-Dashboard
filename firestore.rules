@@ -122,6 +122,7 @@ service cloud.firestore {
       return data.get('userId', '') is string &&
              data.get('userName', '') is string &&
              (data.get('userEmail', null) == null || data.get('userEmail', '') is string) &&
+             (data.get('location', null) == null || data.get('location', '') is string) &&
              data.get('startDate', '') is string &&
              data.get('endDate', '') is string &&
              data.get('status', 'pending') in ['pending', 'approved', 'rejected'] &&
@@ -134,6 +135,7 @@ service cloud.firestore {
              (data.get('approvedAt', null) == null || data.get('approvedAt', '') is string) &&
              (data.get('emailSent', null) == null || data.get('emailSent', false) is bool) &&
              (data.get('emailSentAt', null) == null || data.get('emailSentAt', '') is string) &&
+             (data.get('managerAlertsSentTo', null) == null || data.managerAlertsSentTo is list) &&
              data.get('totalDays', 0) is number;
     }
 
@@ -250,7 +252,7 @@ service cloud.firestore {
     match /vacations/{vacationId} {
       allow read: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
       allow create: if isAuthenticated() && isValidVacation(request.resource.data);
-      allow update: if isAdmin() && isValidVacation(request.resource.data);
+      allow update: if (isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid)) && isValidVacation(request.resource.data);
       allow delete: if isAdmin();
     }
 
