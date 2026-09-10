@@ -57,6 +57,28 @@ function analyzeSmtpError(errorStr?: string): SmtpAnalysis {
   }
   const lower = errorStr.toLowerCase();
 
+  // Rate Limit / Burst / Deferral (421 4.3.0)
+  if (
+    lower.includes('421') ||
+    lower.includes('4.3.0') ||
+    lower.includes('temporary system problem') ||
+    lower.includes('try again later') ||
+    lower.includes('rate limit') ||
+    lower.includes('too many connections')
+  ) {
+    return {
+      type: 'rate_limit',
+      title: 'Google SMTP Burst Rate-Limit (Code 421 4.3.0 Temporary Deferral)',
+      explanation: 'Your credentials and sender address were accepted! Google returned code 421 at the DATA command because a burst of 14 automated check-in emails were submitted simultaneously. Google Workspace temporarily defers burst connections to protect against bulk automated traffic.',
+      steps: [
+        '1. Wait 5 to 15 minutes for Google\'s temporary SMTP cooldown to clear.',
+        '2. Click "Retry All Failed" below (it now delivers each message with a staggered 1.5s delay to prevent burst triggers).',
+        '3. Standard operational emails (like vacation requests or single approvals) will go through smoothly because they do not trigger concurrency filters.',
+        '4. For high-volume automated business notifications, you can also connect the Firebase Extension to SendGrid (free 100 emails/day) which eliminates Google Workspace SMTP rate caps.'
+      ]
+    };
+  }
+
   // 1. Password / Authentication errors
   if (
     lower.includes('535') || 
@@ -233,9 +255,14 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
     const toastId = toast.loading(`Re-queueing ${failedLogs.length} failed emails with active sender...`);
     let reCount = 0;
     try {
-      for (const docItem of failedLogs) {
+      for (let i = 0; i < failedLogs.length; i++) {
+        const docItem = failedLogs[i];
         const ok = await resendMailDocument(docItem);
         if (ok) reCount++;
+        // Throttle requests by 1200ms to stay within Google SMTP burst thresholds
+        if (i < failedLogs.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+        }
       }
       toast.success(`Successfully re-queued ${reCount} message(s)! Refreshing logs...`, { id: toastId, duration: 6000 });
       setTimeout(() => loadLogs(), 3500);

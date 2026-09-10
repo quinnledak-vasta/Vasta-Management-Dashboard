@@ -1505,11 +1505,10 @@ function AppContent() {
             for (const recipient of recipients) {
               if (recipient.email) {
                 try {
-                  await addDoc(collection(db, 'mail'), {
+                  await dispatchEmailNotification({
                     to: recipient.email,
-                    message: {
-                      subject: `⏰ Action Required: Quarterly Check-In Due for ${trainer.name} - ${currentQuarterStr}`,
-                      html: `
+                    subject: `⏰ Action Required: Quarterly Check-In Due for ${trainer.name} - ${currentQuarterStr}`,
+                    html: `
                         <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
                           <div style="background-color: #f59e0b; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
                             <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
@@ -1532,9 +1531,16 @@ function AppContent() {
                           <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
                           <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
                         </div>
-                      `
+                    `,
+                    category: 'checkin_due',
+                    metadata: {
+                      trainerId: trainer.id,
+                      trainerName: trainer.name,
+                      quarter: currentQuarterStr
                     }
                   });
+                  // Add delay between automated emails to avoid SMTP 421 burst rate limits
+                  await new Promise(r => setTimeout(r, 1000));
                 } catch (e) {
                   console.error("Failed to write check-in due alert email document", e);
                 }
@@ -1563,36 +1569,42 @@ function AppContent() {
           for (const recipient of recipients) {
             if (recipient.email) {
               try {
-                await addDoc(collection(db, 'mail'), {
+                await dispatchEmailNotification({
                   to: recipient.email,
-                  message: {
-                    subject: `⚠️ Overdue Check-In: ${trainer.name} - ${prevQuarterStr} Review Pending`,
-                    html: `
-                      <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-                        <div style="background-color: #ef4444; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
-                          <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
-                            ⚠️ Overdue Check-In Alert
-                          </h2>
-                        </div>
-                        
-                        <p>Hi <strong>${recipient.name}</strong>,</p>
-                        <p>The previous quarter has ended, but a quarterly check-in has not been recorded for coach <strong>${trainer.name}</strong>.</p>
-                        
-                        <div style="background-color: #fef2f2; padding: 20px; border-radius: 8px; border: 1px solid #fee2e2; margin: 20px 0;">
-                          <p style="margin: 0 0 10px 0;"><strong>Coach Name:</strong> ${trainer.name}</p>
-                          <p style="margin: 0 0 10px 0;"><strong>Location:</strong> ${trainer.location || 'N/A'}</p>
-                          <p style="margin: 0 0 10px 0;"><strong>Missed Quarter:</strong> ${prevQuarterStr}</p>
-                          <p style="margin: 0; font-size: 14px; font-weight: bold; color: #dc2626;">Status: OVERDUE</p>
-                        </div>
-                        
-                        <p>This check-in is now past due. Please prioritize conducting this check-in to ensure staff development files remain up to date.</p>
-                        
-                        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                        <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                  subject: `⚠️ Overdue Check-In: ${trainer.name} - ${prevQuarterStr} Review Pending`,
+                  html: `
+                    <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+                      <div style="background-color: #ef4444; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                        <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
+                          ⚠️ Overdue Check-In Alert
+                        </h2>
                       </div>
-                    `
+                      
+                      <p>Hi <strong>${recipient.name}</strong>,</p>
+                      <p>The previous quarter has ended, but a quarterly check-in has not been recorded for coach <strong>${trainer.name}</strong>.</p>
+                      
+                      <div style="background-color: #fef2f2; padding: 20px; border-radius: 8px; border: 1px solid #fee2e2; margin: 20px 0;">
+                        <p style="margin: 0 0 10px 0;"><strong>Coach Name:</strong> ${trainer.name}</p>
+                        <p style="margin: 0 0 10px 0;"><strong>Location:</strong> ${trainer.location || 'N/A'}</p>
+                        <p style="margin: 0 0 10px 0;"><strong>Missed Quarter:</strong> ${prevQuarterStr}</p>
+                        <p style="margin: 0; font-size: 14px; font-weight: bold; color: #dc2626;">Status: OVERDUE</p>
+                      </div>
+                      
+                      <p>This check-in is now past due. Please prioritize conducting this check-in to ensure staff development files remain up to date.</p>
+                      
+                      <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                      <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+                    </div>
+                  `,
+                  category: 'checkin_due',
+                  metadata: {
+                    trainerId: trainer.id,
+                    trainerName: trainer.name,
+                    quarter: prevQuarterStr
                   }
                 });
+                // Add delay between automated emails to avoid SMTP 421 burst rate limits
+                await new Promise(r => setTimeout(r, 1000));
               } catch (e) {
                 console.error("Failed to write overdue alert email document", e);
               }
@@ -1694,11 +1706,10 @@ function AppContent() {
 
           for (const manager of locationManagers) {
             try {
-              await addDoc(collection(db, 'mail'), {
+              await dispatchEmailNotification({
                 to: manager.email,
-                message: {
-                  subject: `📋 Annual Review Due (${dueDateFormatted}): ${trainer.name} (${targetYear} Review - ${trainer.location})`,
-                  html: `
+                subject: `📋 Annual Review Due (${dueDateFormatted}): ${trainer.name} (${targetYear} Review - ${trainer.location})`,
+                html: `
                     <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
                       <div style="background-color: #dc2626; color: white; padding: 16px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
                         <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
@@ -1741,9 +1752,16 @@ function AppContent() {
                         This alert was automatically sent to location managers for ${trainer.location} from the Vasta Dashboard.
                       </p>
                     </div>
-                  `
+                `,
+                category: 'annual_review',
+                metadata: {
+                  trainerId: trainer.id,
+                  trainerName: trainer.name,
+                  targetYear
                 }
               });
+              // Add delay between automated emails to avoid SMTP 421 burst rate limits
+              await new Promise(r => setTimeout(r, 1000));
             } catch (e) {
               console.error("Failed to send annual review email alert document", e);
             }
