@@ -804,7 +804,6 @@ function AppContent() {
 
       await dispatchEmailNotification({
         to: recipientEmail,
-        from: 'Vasta Performance Training <noreply@vastasports.com>',
         replyTo: 'quinnledak@vastasports.com',
         subject: cleanSubject,
         html: htmlContent,
@@ -1108,7 +1107,6 @@ function AppContent() {
 
           const dispatchRes = await dispatchEmailNotification({
             to: recipient.email,
-            from: 'Vasta Performance Training <noreply@vastasports.com>',
             replyTo: 'quinnledak@vastasports.com',
             subject: cleanSubject,
             html: emailHtml,
@@ -3782,7 +3780,6 @@ function AppContent() {
 
           const dispatchRes = await dispatchEmailNotification({
             to: recipient.email,
-            from: 'Vasta Performance Training <noreply@vastasports.com>',
             replyTo: 'quinnledak@vastasports.com',
             subject: cleanSubject,
             html: restockHtml,

@@ -57,6 +57,46 @@ export function stripHtmlToText(html: string): string {
     .trim();
 }
 
+export type SenderMode = 'quinn' | 'extension_default' | 'noreply' | 'custom';
+
+export interface SenderConfig {
+  mode: SenderMode;
+  customValue?: string;
+  effectiveFrom?: string;
+}
+
+export function getActiveSenderConfig(): SenderConfig {
+  try {
+    const savedMode = (localStorage.getItem('vasta_email_sender_mode') as SenderMode) || 'quinn';
+    const customVal = localStorage.getItem('vasta_email_sender_custom') || '';
+    
+    if (savedMode === 'extension_default') {
+      return { mode: 'extension_default', effectiveFrom: undefined };
+    }
+    if (savedMode === 'noreply') {
+      return { mode: 'noreply', effectiveFrom: 'Vasta Performance Training <noreply@vastasports.com>' };
+    }
+    if (savedMode === 'custom' && customVal.trim()) {
+      return { mode: 'custom', customValue: customVal.trim(), effectiveFrom: customVal.trim() };
+    }
+    // Default mode: 'quinn' (matches Google Workspace SMTP login to prevent 550 sender rejection)
+    return { mode: 'quinn', effectiveFrom: 'Vasta Performance Training <quinnledak@vastasports.com>' };
+  } catch {
+    return { mode: 'quinn', effectiveFrom: 'Vasta Performance Training <quinnledak@vastasports.com>' };
+  }
+}
+
+export function setActiveSenderConfig(mode: SenderMode, customValue?: string): void {
+  try {
+    localStorage.setItem('vasta_email_sender_mode', mode);
+    if (customValue !== undefined) {
+      localStorage.setItem('vasta_email_sender_custom', customValue);
+    }
+  } catch (e) {
+    console.error('Error saving email sender config:', e);
+  }
+}
+
 /**
  * Dispatches an email notification via Firestore Trigger Email extension.
  * Dual-writes to both the primary database and (default) database to ensure
@@ -70,7 +110,7 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
   dualWritten: boolean;
   error?: string;
 }> {
-  const DEFAULT_FROM = 'Vasta Performance Training <noreply@vastasports.com>';
+  const senderCfg = getActiveSenderConfig();
   const DEFAULT_REPLY_TO = 'quinnledak@vastasports.com';
 
   const cleanText = payload.text || stripHtmlToText(payload.html);
@@ -78,7 +118,6 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
   // Standardize mail document data compliant with firestore-send-email extension
   const mailDocData: Record<string, any> = {
     to: payload.to,
-    from: payload.from || DEFAULT_FROM,
     replyTo: payload.replyTo || DEFAULT_REPLY_TO,
     message: {
       subject: payload.subject,
@@ -88,6 +127,15 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
     createdAt: new Date().toISOString(),
     source: 'vasta-dashboard'
   };
+
+  // Determine FROM field:
+  // If payload explicitly provided one, use it.
+  // Otherwise use the active sender setting.
+  // If mode is 'extension_default', we omit `from` so the Firebase Extension uses its own Default FROM Address.
+  const resolvedFrom = payload.from !== undefined ? payload.from : senderCfg.effectiveFrom;
+  if (resolvedFrom) {
+    mailDocData.from = resolvedFrom;
+  }
 
   if (payload.category) {
     mailDocData.category = payload.category;
@@ -200,6 +248,43 @@ export async function retryMailDelivery(mailId: string, databaseType: 'primary' 
     return true;
   } catch (err) {
     console.error('Error retrying mail delivery:', err);
+    return false;
+  }
+}
+
+/**
+ * Re-sends a failed mail document by creating a fresh mail document with the latest sender configuration.
+ * This guarantees an onCreate trigger event in the Firebase Trigger Email extension.
+ */
+export async function resendMailDocument(originalDoc: MailDeliveryDoc): Promise<boolean> {
+  try {
+    const targetDb = originalDoc.database === 'primary' ? db : defaultDb;
+    const senderCfg = getActiveSenderConfig();
+    
+    const newMailData: Record<string, any> = {
+      to: originalDoc.to,
+      replyTo: originalDoc.replyTo || 'quinnledak@vastasports.com',
+      message: {
+        subject: originalDoc.subject,
+        html: originalDoc.htmlPreview ? `<p>${originalDoc.htmlPreview}</p>` : `<p>${originalDoc.subject}</p>`,
+        text: originalDoc.subject
+      },
+      createdAt: new Date().toISOString(),
+      source: 'vasta-dashboard-retry',
+      retriedFromDocId: originalDoc.id
+    };
+
+    if (senderCfg.effectiveFrom) {
+      newMailData.from = senderCfg.effectiveFrom;
+    }
+    if (originalDoc.category) {
+      newMailData.category = originalDoc.category;
+    }
+
+    await addDoc(collection(targetDb, 'mail'), newMailData);
+    return true;
+  } catch (err) {
+    console.error('Error resending mail document:', err);
     return false;
   }
 }
