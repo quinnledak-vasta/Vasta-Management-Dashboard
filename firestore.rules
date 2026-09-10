@@ -273,7 +273,7 @@ service cloud.firestore {
     
     // Mail collection (Trigger Email extension)
     match /mail/{mailId} {
-      allow read: if isAdmin();
+      allow read, update, delete: if isAdmin();
       allow create: if isAuthenticated() && isValidMail(request.resource.data);
     }
 

@@ -6,8 +6,9 @@ import {
   signOut,
   User as FirebaseUser
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, deleteDoc, addDoc, collection } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc, collection } from 'firebase/firestore';
 import { auth, db } from './firebase';
+import { dispatchEmailNotification } from './emailService';
 import { toast } from 'sonner';
 
 interface User {
@@ -133,31 +134,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         status: 'pending'
       });
 
-      // Send email alert
+      // Send email alert via dual-write pipeline
       try {
-        await addDoc(collection(db, 'mail'), {
+        await dispatchEmailNotification({
           to: emailLower,
-          message: {
-            subject: 'Invitation to Join Vasta Personal Training Dashboard',
-            html: `
-              <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #eee; border-radius: 8px;">
-                <h2 style="color: #ef4444; border-bottom: 2px solid #ef4444; padding-bottom: 10px;">Welcome to Vasta!</h2>
-                <p>Hello,</p>
-                <p><strong>${user?.name || 'An administrator'}</strong> has invited you to join the Vasta Personal Training Dashboard as a <strong>${role}</strong> for the <strong>${location}</strong> location.</p>
-                <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
-                  <p style="margin: 5px 0;"><strong>Role:</strong> ${role.charAt(0).toUpperCase() + role.slice(1)}</p>
-                  <p style="margin: 5px 0;"><strong>Location:</strong> ${location}</p>
-                </div>
-                <p>To accept this invitation and get started, please click the button below to sign in with your Google account:</p>
-                <div style="text-align: center; margin: 30px 0;">
-                  <a href="${window.location.origin}" style="background-color: #ef4444; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Sign In to Vasta</a>
-                </div>
-                <p style="font-size: 14px; color: #64748b;">Note: You must sign in using the email address this invitation was sent to (${emailLower}).</p>
-                <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                <p style="font-size: 12px; color: #94a3b8; text-align: center;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+          subject: 'Invitation to Join Vasta Personal Training Dashboard',
+          category: 'invite',
+          html: `
+            <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #eee; border-radius: 8px;">
+              <h2 style="color: #ef4444; border-bottom: 2px solid #ef4444; padding-bottom: 10px;">Welcome to Vasta!</h2>
+              <p>Hello,</p>
+              <p><strong>${user?.name || 'An administrator'}</strong> has invited you to join the Vasta Personal Training Dashboard as a <strong>${role}</strong> for the <strong>${location}</strong> location.</p>
+              <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 20px 0;">
+                <p style="margin: 5px 0;"><strong>Role:</strong> ${role.charAt(0).toUpperCase() + role.slice(1)}</p>
+                <p style="margin: 5px 0;"><strong>Location:</strong> ${location}</p>
               </div>
-            `
-          }
+              <p>To accept this invitation and get started, please click the button below to sign in with your Google account:</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${window.location.origin}" style="background-color: #ef4444; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Sign In to Vasta</a>
+              </div>
+              <p style="font-size: 14px; color: #64748b;">Note: You must sign in using the email address this invitation was sent to (${emailLower}).</p>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <p style="font-size: 12px; color: #94a3b8; text-align: center;">This is an automated notification from the Vasta Personal Training Dashboard.</p>
+            </div>
+          `
         });
       } catch (emailError) {
         console.error('Error sending invite email:', emailError);

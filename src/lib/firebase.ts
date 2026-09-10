@@ -7,8 +7,14 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
-export const db = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+export const defaultDb = getFirestore(app);
+export const isCustomDatabase = Boolean(
+  firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+);
+export const firestoreDatabaseId = firebaseConfig.firestoreDatabaseId || '(default)';
+
+export const db = isCustomDatabase
   ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
-  : getFirestore(app);
+  : defaultDb;
 
 export default app;

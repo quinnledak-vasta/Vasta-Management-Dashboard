@@ -108,6 +108,8 @@ import { AuthProvider, useAuth } from './lib/AuthContext';
 import { LoginPage } from './components/LoginPage';
 import { TrainerCheckInPanel } from './components/TrainerCheckInPanel';
 import { db, auth } from './lib/firebase';
+import { dispatchEmailNotification } from './lib/emailService';
+import { EmailDiagnosticsModal } from './components/EmailDiagnosticsModal';
 import { saveLocalVideo, getLocalVideoBlob, syncAllLocalVideosToFirestore } from './lib/videoCache';
 import { 
   collection, 
@@ -237,6 +239,7 @@ function AppContent() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [isEmailDiagnosticsOpen, setIsEmailDiagnosticsOpen] = useState(false);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [vacations, setVacations] = useState<VacationRequest[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
@@ -797,11 +800,19 @@ function AppContent() {
         </div>
       `;
 
-      await addDoc(collection(db, 'mail'), {
+      const cleanSubject = `[Vasta Alert] Vacation ${decision.toUpperCase()}: ${vacation.userName} (${vacation.startDate} - ${vacation.endDate})`;
+
+      await dispatchEmailNotification({
         to: recipientEmail,
-        message: {
-          subject,
-          html: htmlContent
+        from: 'Vasta Performance Training <noreply@vastasports.com>',
+        replyTo: 'quinnledak@vastasports.com',
+        subject: cleanSubject,
+        html: htmlContent,
+        category: 'vacation_decision',
+        metadata: {
+          vacationId: vacation.id,
+          userId: vacation.userId,
+          status: decision
         }
       });
 
@@ -1003,103 +1014,116 @@ function AppContent() {
       for (const recipient of allRecipients) {
         try {
           const typeLabel = (vacation.type || 'vacation').charAt(0).toUpperCase() + (vacation.type || 'vacation').slice(1);
-          await addDoc(collection(db, 'mail'), {
-            to: recipient.email,
-            message: {
-              subject: `🏖️ Vacation Request: ${vacation.userName} (${targetLoc})`,
-              html: `
-                <div style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 25px; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
-                  <div style="border-bottom: 2px solid #dc2626; padding-bottom: 16px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
-                    <div>
-                      <span style="font-weight: 800; font-size: 20px; color: #dc2626; letter-spacing: -0.5px;">VASTA</span>
-                      <span style="font-size: 14px; color: #64748b; margin-left: 8px; font-weight: 500;">Performance Training</span>
-                    </div>
-                    <span style="background-color: #fef2f2; color: #dc2626; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; border: 1px solid #fecaca; text-transform: uppercase; letter-spacing: 0.5px;">
-                      Time Off Request
-                    </span>
-                  </div>
-
-                  <h2 style="color: #0f172a; font-size: 18px; margin: 0 0 12px 0; font-weight: 700;">
-                    New Vacation Request Submitted
-                  </h2>
-                  <p style="font-size: 14px; line-height: 1.5; color: #334155; margin: 0 0 16px 0;">
-                    Hi <strong>${recipient.name}</strong> (${recipient.label}),
-                  </p>
-                  <p style="font-size: 14px; line-height: 1.5; color: #334155; margin: 0 0 20px 0;">
-                    <strong>${vacation.userName}</strong> has submitted a time-off request for the <strong>${targetLoc}</strong> facility. Please review the details below:
-                  </p>
-                  
-                  <div style="background-color: #f8fafc; padding: 20px; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 24px;">
-                    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-                      <tr>
-                        <td style="padding: 6px 0; color: #64748b; width: 38%; font-weight: 500;">Staff Member:</td>
-                        <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${vacation.userName}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Facility / Location:</td>
-                        <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${targetLoc}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Requested Period:</td>
-                        <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${formattedDates}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Total Duration:</td>
-                        <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${vacation.totalDays || 1} day(s) (${vacation.hours || 8} hrs/day)</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Leave Type:</td>
-                        <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">
-                          <span style="background-color: #e2e8f0; color: #334155; padding: 2px 8px; border-radius: 4px; font-size: 12px;">${typeLabel}</span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 6px 0; color: #64748b; font-weight: 500; vertical-align: top;">Requester Notes:</td>
-                        <td style="padding: 6px 0; color: #334155; font-style: italic;">
-                          ${vacation.notes ? `"${vacation.notes}"` : '<span style="color: #94a3b8;">None provided</span>'}
-                        </td>
-                      </tr>
-                    </table>
-                  </div>
-
-                  <div style="background-color: #f1f5f9; padding: 12px 16px; border-radius: 8px; font-size: 12px; color: #475569; margin-bottom: 24px; border-left: 4px solid #3b82f6;">
-                    <p style="margin: 0 0 4px 0;"><strong>Notification Routing:</strong></p>
-                    <p style="margin: 0 0 2px 0;">• Location Manager(s): ${managerSummaryText}</p>
-                    <p style="margin: 0;">• Owner(s): ${ownerSummaryText}</p>
-                  </div>
-
-                  <p style="font-size: 14px; line-height: 1.5; color: #334155; margin-bottom: 16px; font-weight: 600; text-align: center;">
-                    Take Immediate Action:
-                  </p>
-                  
-                  <div style="text-align: center; margin: 20px 0;">
-                    <a href="${approveLink}" style="display: inline-block; background-color: #16a34a; color: #ffffff; text-decoration: none; padding: 13px 26px; font-weight: bold; border-radius: 8px; font-size: 14px; margin-right: 12px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(22, 163, 74, 0.2);">
-                      ✔ Approve Request
-                    </a>
-                    <a href="${rejectLink}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 13px 26px; font-weight: bold; border-radius: 8px; font-size: 14px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(220, 38, 38, 0.2);">
-                      ✘ Reject Request
-                    </a>
-                  </div>
-
-                  <p style="font-size: 12px; color: #64748b; text-align: center; margin: 10px 0 24px 0; font-style: italic;">
-                    Clicking either action will prompt you to securely sign in (if needed) and instantly process the request and notify the staff member.
-                  </p>
-
-                  <div style="text-align: center; border-top: 1px solid #f1f5f9; padding-top: 16px;">
-                    <a href="${approvalLink}" style="font-size: 13px; color: #dc2626; text-decoration: none; font-weight: 600;">
-                      View Full Staff Schedule & Vacations Calendar →
-                    </a>
-                  </div>
-                  
-                  <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0 15px 0;" />
-                  <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
-                    This is an automated operational notification from the Vasta Personal Training System.
-                  </p>
+          const cleanSubject = `[Vasta Alert] Vacation Request: ${vacation.userName} (${targetLoc})`;
+          const emailHtml = `
+            <div style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 25px; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+              <div style="border-bottom: 2px solid #dc2626; padding-bottom: 16px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
+                <div>
+                  <span style="font-weight: 800; font-size: 20px; color: #dc2626; letter-spacing: -0.5px;">VASTA</span>
+                  <span style="font-size: 14px; color: #64748b; margin-left: 8px; font-weight: 500;">Performance Training</span>
                 </div>
-              `
+                <span style="background-color: #fef2f2; color: #dc2626; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; border: 1px solid #fecaca; text-transform: uppercase; letter-spacing: 0.5px;">
+                  Time Off Request
+                </span>
+              </div>
+
+              <h2 style="color: #0f172a; font-size: 18px; margin: 0 0 12px 0; font-weight: 700;">
+                New Vacation Request Submitted
+              </h2>
+              <p style="font-size: 14px; line-height: 1.5; color: #334155; margin: 0 0 16px 0;">
+                Hi <strong>${recipient.name}</strong> (${recipient.label}),
+              </p>
+              <p style="font-size: 14px; line-height: 1.5; color: #334155; margin: 0 0 20px 0;">
+                <strong>${vacation.userName}</strong> has submitted a time-off request for the <strong>${targetLoc}</strong> facility. Please review the details below:
+              </p>
+              
+              <div style="background-color: #f8fafc; padding: 20px; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 24px;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                  <tr>
+                    <td style="padding: 6px 0; color: #64748b; width: 38%; font-weight: 500;">Staff Member:</td>
+                    <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${vacation.userName}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Facility / Location:</td>
+                    <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${targetLoc}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Requested Period:</td>
+                    <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${formattedDates}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Total Duration:</td>
+                    <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${vacation.totalDays || 1} day(s) (${vacation.hours || 8} hrs/day)</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 6px 0; color: #64748b; font-weight: 500;">Leave Type:</td>
+                    <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">
+                      <span style="background-color: #e2e8f0; color: #334155; padding: 2px 8px; border-radius: 4px; font-size: 12px;">${typeLabel}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 6px 0; color: #64748b; font-weight: 500; vertical-align: top;">Requester Notes:</td>
+                    <td style="padding: 6px 0; color: #334155; font-style: italic;">
+                      ${vacation.notes ? `"${vacation.notes}"` : '<span style="color: #94a3b8;">None provided</span>'}
+                    </td>
+                  </tr>
+                </table>
+              </div>
+
+              <div style="background-color: #f1f5f9; padding: 12px 16px; border-radius: 8px; font-size: 12px; color: #475569; margin-bottom: 24px; border-left: 4px solid #3b82f6;">
+                <p style="margin: 0 0 4px 0;"><strong>Notification Routing:</strong></p>
+                <p style="margin: 0 0 2px 0;">• Location Manager(s): ${managerSummaryText}</p>
+                <p style="margin: 0;">• Owner(s): ${ownerSummaryText}</p>
+              </div>
+
+              <p style="font-size: 14px; line-height: 1.5; color: #334155; margin-bottom: 16px; font-weight: 600; text-align: center;">
+                Take Immediate Action:
+              </p>
+              
+              <div style="text-align: center; margin: 20px 0;">
+                <a href="${approveLink}" style="display: inline-block; background-color: #16a34a; color: #ffffff; text-decoration: none; padding: 13px 26px; font-weight: bold; border-radius: 8px; font-size: 14px; margin-right: 12px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(22, 163, 74, 0.2);">
+                  ✔ Approve Request
+                </a>
+                <a href="${rejectLink}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 13px 26px; font-weight: bold; border-radius: 8px; font-size: 14px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(220, 38, 38, 0.2);">
+                  ✘ Reject Request
+                </a>
+              </div>
+
+              <p style="font-size: 12px; color: #64748b; text-align: center; margin: 10px 0 24px 0; font-style: italic;">
+                Clicking either action will prompt you to securely sign in (if needed) and instantly process the request and notify the staff member.
+              </p>
+
+              <div style="text-align: center; border-top: 1px solid #f1f5f9; padding-top: 16px;">
+                <a href="${approvalLink}" style="font-size: 13px; color: #dc2626; text-decoration: none; font-weight: 600;">
+                  View Full Staff Schedule & Vacations Calendar →
+                </a>
+              </div>
+              
+              <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0 15px 0;" />
+              <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
+                This is an automated operational notification from the Vasta Personal Training System.
+              </p>
+            </div>
+          `;
+
+          const dispatchRes = await dispatchEmailNotification({
+            to: recipient.email,
+            from: 'Vasta Performance Training <noreply@vastasports.com>',
+            replyTo: 'quinnledak@vastasports.com',
+            subject: cleanSubject,
+            html: emailHtml,
+            category: 'vacation_request',
+            metadata: {
+              vacationId: vacation.id,
+              userId: vacation.userId,
+              userName: vacation.userName,
+              location: targetLoc
             }
           });
-          successfulEmails.push(recipient.email);
+
+          if (dispatchRes.success) {
+            successfulEmails.push(recipient.email);
+          }
         } catch (mailErr) {
           console.error(`Error sending vacation alert to ${recipient.email}:`, mailErr);
         }
@@ -3709,58 +3733,72 @@ function AppContent() {
 
       for (const recipient of allRecipients) {
         try {
-          await addDoc(collection(db, 'mail'), {
-            to: recipient.email,
-            message: {
-              subject: `🛒 Restock Request: ${selectedRestockLocation} - Submitted by ${user.name}`,
-              html: `
-                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-                  <div style="background-color: #dc2626; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
-                    <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
-                      🛒 New Inventory Restock Request
-                    </h2>
-                  </div>
-                  
-                  <p>Hi <strong>${recipient.name}</strong>,</p>
-                  <p>A new inventory restock request has been submitted by <strong>${user.name}</strong> for the <strong>${selectedRestockLocation}</strong> facility.</p>
-                  
-                  <div style="background-color: #f8fafc; padding: 12px 16px; border-radius: 8px; margin: 16px 0; font-size: 13px; color: #475569; border: 1px solid #e2e8f0;">
-                    <p style="margin: 0 0 4px 0;"><strong>Facility:</strong> ${selectedRestockLocation}</p>
-                    <p style="margin: 0 0 4px 0;"><strong>Location Manager(s):</strong> ${managerSummaryText}</p>
-                    <p style="margin: 0 0 4px 0;"><strong>Owner(s):</strong> ${ownerSummaryText}</p>
-                    <p style="margin: 0;"><strong>Recipient Role:</strong> ${recipient.label}</p>
-                  </div>
+          const cleanSubject = `[Vasta Alert] Restock Request: ${selectedRestockLocation} - Submitted by ${user.name}`;
+          const restockHtml = `
+            <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+              <div style="background-color: #dc2626; color: white; padding: 15px 20px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+                <h2 style="margin: 0; font-size: 20px; font-weight: bold;">
+                  New Inventory Restock Request
+                </h2>
+              </div>
+              
+              <p>Hi <strong>${recipient.name}</strong>,</p>
+              <p>A new inventory restock request has been submitted by <strong>${user.name}</strong> for the <strong>${selectedRestockLocation}</strong> facility.</p>
+              
+              <div style="background-color: #f8fafc; padding: 12px 16px; border-radius: 8px; margin: 16px 0; font-size: 13px; color: #475569; border: 1px solid #e2e8f0;">
+                <p style="margin: 0 0 4px 0;"><strong>Facility:</strong> ${selectedRestockLocation}</p>
+                <p style="margin: 0 0 4px 0;"><strong>Location Manager(s):</strong> ${managerSummaryText}</p>
+                <p style="margin: 0 0 4px 0;"><strong>Owner(s):</strong> ${ownerSummaryText}</p>
+                <p style="margin: 0;"><strong>Recipient Role:</strong> ${recipient.label}</p>
+              </div>
 
-                  <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
-                    <thead>
-                      <tr style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0; text-align: left;">
-                        <th style="padding: 10px; color: #475569; font-size: 13px;">Item Name</th>
-                        <th style="padding: 10px; color: #475569; font-size: 13px;">Category</th>
-                        <th style="padding: 10px; color: #475569; font-size: 13px; text-align: center;">Current Stock</th>
-                        <th style="padding: 10px; color: #475569; font-size: 13px; text-align: center;">Requested Qty</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${itemsListHtml}
-                    </tbody>
-                  </table>
+              <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                <thead>
+                  <tr style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0; text-align: left;">
+                    <th style="padding: 10px; color: #475569; font-size: 13px;">Item Name</th>
+                    <th style="padding: 10px; color: #475569; font-size: 13px;">Category</th>
+                    <th style="padding: 10px; color: #475569; font-size: 13px; text-align: center;">Current Stock</th>
+                    <th style="padding: 10px; color: #475569; font-size: 13px; text-align: center;">Requested Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${itemsListHtml}
+                </tbody>
+              </table>
 
-                  ${restockNotes ? `
-                    <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border-left: 4px solid #dc2626; margin: 20px 0;">
-                      <p style="margin: 0 0 5px 0; font-weight: bold; color: #475569; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Request Notes:</p>
-                      <p style="margin: 0; color: #334155; font-style: italic;">"${restockNotes}"</p>
-                    </div>
-                  ` : ''}
-                  
-                  <p>Please review local inventory and coordinate purchasing as needed.</p>
-                  
-                  <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-                  <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated request from the Vasta Personal Training Dashboard.</p>
+              ${restockNotes ? `
+                <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; border-left: 4px solid #dc2626; margin: 20px 0;">
+                  <p style="margin: 0 0 5px 0; font-weight: bold; color: #475569; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Request Notes:</p>
+                  <p style="margin: 0; color: #334155; font-style: italic;">"${restockNotes}"</p>
                 </div>
-              `
+              ` : ''}
+              
+              <p>Please review local inventory and coordinate purchasing as needed.</p>
+              
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">This is an automated request from the Vasta Personal Training Dashboard.</p>
+            </div>
+          `;
+
+          const dispatchRes = await dispatchEmailNotification({
+            to: recipient.email,
+            from: 'Vasta Performance Training <noreply@vastasports.com>',
+            replyTo: 'quinnledak@vastasports.com',
+            subject: cleanSubject,
+            html: restockHtml,
+            category: 'restock_request',
+            metadata: {
+              location: selectedRestockLocation,
+              submittedBy: user.name,
+              itemCount: itemsRequested.length
             }
           });
-          successCount++;
+
+          if (dispatchRes.success) {
+            successCount++;
+          } else {
+            sendErrors.push(recipient.email);
+          }
         } catch (mailError) {
           console.error(`Error adding mail doc for ${recipient.email}:`, mailError);
           sendErrors.push(recipient.email);
@@ -4006,7 +4044,20 @@ function AppContent() {
             </p>
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex items-center gap-3">
+            {isAdmin && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsEmailDiagnosticsOpen(true)}
+                className="border-slate-200 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 text-xs font-semibold shadow-xs"
+                title="Inspect email delivery queue, SMTP status, and test alert routing"
+              >
+                <Mail className="w-3.5 h-3.5 text-red-600" />
+                <span>Email Logs</span>
+              </Button>
+            )}
+
             {activeTab === 'onboarding' && (
               <div className="flex items-center gap-2">
                 {canManageEducation && (
@@ -6025,7 +6076,19 @@ function AppContent() {
                     </TabsTrigger>
                   </TabsList>
 
-                  <div className="flex gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {isAdmin && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setIsEmailDiagnosticsOpen(true)}
+                        className="border-slate-200 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 text-xs h-9"
+                        title="View vacation request email delivery logs and retry queued alerts"
+                      >
+                        <Mail className="w-3.5 h-3.5 text-red-600" />
+                        <span>Email Status</span>
+                      </Button>
+                    )}
                     <Dialog open={isNewVacationOpen} onOpenChange={(open) => {
                     setIsNewVacationOpen(open);
                       if (open) {
@@ -8998,6 +9061,13 @@ function AppContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Email Diagnostics & Delivery Logs Modal */}
+      <EmailDiagnosticsModal
+        isOpen={isEmailDiagnosticsOpen}
+        onClose={() => setIsEmailDiagnosticsOpen(false)}
+        currentUserEmail={user?.email || 'quinnledak@vastasports.com'}
+      />
 
       </div>
     </div>
