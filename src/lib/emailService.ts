@@ -30,6 +30,7 @@ export interface MailDeliveryDoc {
   replyTo?: string;
   subject: string;
   htmlPreview?: string;
+  rawHtml?: string;
   category?: string;
   createdAt?: string;
   delivery?: {
@@ -98,10 +99,27 @@ export function setActiveSenderConfig(mode: SenderMode, customValue?: string): v
 }
 
 /**
- * Dispatches an email notification via Firestore Trigger Email extension.
- * Dual-writes to both the primary database and (default) database to ensure
- * extension triggers regardless of whether the extension was provisioned on
- * the named database or (default) database in Firebase Console.
+ * Checks backend server email configuration (SendGrid API key status)
+ */
+export async function checkServerEmailConfig(): Promise<{
+  configured: boolean;
+  provider: string;
+  defaultFrom: string;
+  maskedKey: string | null;
+}> {
+  try {
+    const res = await fetch('/api/email-config');
+    if (!res.ok) return { configured: false, provider: 'none', defaultFrom: '', maskedKey: null };
+    return await res.json();
+  } catch {
+    return { configured: false, provider: 'none', defaultFrom: '', maskedKey: null };
+  }
+}
+
+/**
+ * Dispatches an email notification.
+ * Primary: Attempts direct delivery via SendGrid REST API (/api/send-email).
+ * Audit/Queue: Writes delivery record to Firestore so logs & diagnostics stay in sync.
  */
 export async function dispatchEmailNotification(payload: EmailPayload): Promise<{
   success: boolean;
@@ -109,13 +127,15 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
   defaultDocId?: string;
   dualWritten: boolean;
   error?: string;
+  directDelivered?: boolean;
 }> {
   const senderCfg = getActiveSenderConfig();
   const DEFAULT_REPLY_TO = 'quinnledak@vastasports.com';
 
   const cleanText = payload.text || stripHtmlToText(payload.html);
+  const resolvedFrom = payload.from !== undefined ? payload.from : senderCfg.effectiveFrom;
   
-  // Standardize mail document data compliant with firestore-send-email extension
+  // Standardize mail document data compliant with firestore logs & trigger extension
   const mailDocData: Record<string, any> = {
     to: payload.to,
     replyTo: payload.replyTo || DEFAULT_REPLY_TO,
@@ -128,15 +148,9 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
     source: 'vasta-dashboard'
   };
 
-  // Determine FROM field:
-  // If payload explicitly provided one, use it.
-  // Otherwise use the active sender setting.
-  // If mode is 'extension_default', we omit `from` so the Firebase Extension uses its own Default FROM Address.
-  const resolvedFrom = payload.from !== undefined ? payload.from : senderCfg.effectiveFrom;
   if (resolvedFrom) {
     mailDocData.from = resolvedFrom;
   }
-
   if (payload.category) {
     mailDocData.category = payload.category;
   }
@@ -144,11 +158,58 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
     mailDocData.metadata = payload.metadata;
   }
 
+  // 1. First attempt direct delivery via server-side SendGrid endpoint
+  let directDeliverySuccess = false;
+  let directError: string | undefined;
+  let sendgridMsgId: string | undefined;
+
+  try {
+    const res = await fetch('/api/send-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: payload.to,
+        from: resolvedFrom || 'quinnledak@vastasports.com',
+        replyTo: payload.replyTo || DEFAULT_REPLY_TO,
+        subject: payload.subject,
+        html: payload.html,
+        text: cleanText
+      })
+    });
+
+    const data = await res.json();
+    if (res.ok && data.success) {
+      directDeliverySuccess = true;
+      sendgridMsgId = data.messageId;
+      mailDocData.delivery = {
+        state: 'SUCCESS',
+        attempts: 1,
+        startTime: new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        info: {
+          provider: 'sendgrid_direct',
+          messageId: sendgridMsgId || `sg-${Date.now()}`
+        }
+      };
+    } else {
+      directError = data.error || `HTTP ${res.status}: Failed to send via SendGrid`;
+      mailDocData.delivery = {
+        state: 'ERROR',
+        attempts: 1,
+        error: directError,
+        endTime: new Date().toISOString()
+      };
+    }
+  } catch (netErr: any) {
+    console.warn('Direct SendGrid call bypassed/network error, writing to Firestore queue:', netErr);
+    // Bypassed or server offline: leave delivery undefined so Firebase Extension can process if running
+  }
+
   let primaryDocId: string | undefined;
   let defaultDocId: string | undefined;
   let primaryError: string | undefined;
 
-  // 1. Write to primary configured database
+  // 2. Persist audit log to primary database
   try {
     const primaryRef = await addDoc(collection(db, 'mail'), mailDocData);
     primaryDocId = primaryRef.id;
@@ -157,7 +218,7 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
     primaryError = err?.message || 'Primary database mail write failed';
   }
 
-  // 2. Dual-write to default database if using a custom database ID
+  // 3. Dual-write to default database if using a custom database ID
   let dualWritten = false;
   if (isCustomDatabase) {
     try {
@@ -169,14 +230,15 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
     }
   }
 
-  const overallSuccess = Boolean(primaryDocId || defaultDocId);
+  const overallSuccess = directDeliverySuccess || Boolean(primaryDocId || defaultDocId);
 
   return {
-    success: overallSuccess,
+    success: directDeliverySuccess || overallSuccess,
     primaryDocId,
     defaultDocId,
     dualWritten,
-    error: overallSuccess ? undefined : primaryError
+    directDelivered: directDeliverySuccess,
+    error: directError || primaryError
   };
 }
 
@@ -200,6 +262,7 @@ export async function fetchMailDeliveryLogs(maxRecords = 25): Promise<MailDelive
         replyTo: data.replyTo,
         subject,
         htmlPreview: stripHtmlToText(rawHtml).slice(0, 140),
+        rawHtml,
         category: data.category,
         createdAt: data.createdAt || (d.createTime ? d.createTime.toDate().toISOString() : undefined),
         delivery: data.delivery
@@ -234,7 +297,7 @@ export async function fetchMailDeliveryLogs(maxRecords = 25): Promise<MailDelive
 }
 
 /**
- * Re-queues a failed or pending mail document by resetting its delivery state
+ * Re-queues a failed or pending mail document by resetting its delivery state and re-dispatching
  */
 export async function retryMailDelivery(mailId: string, databaseType: 'primary' | 'default'): Promise<boolean> {
   try {
@@ -253,36 +316,43 @@ export async function retryMailDelivery(mailId: string, databaseType: 'primary' 
 }
 
 /**
- * Re-sends a failed mail document by creating a fresh mail document with the latest sender configuration.
- * This guarantees an onCreate trigger event in the Firebase Trigger Email extension.
+ * Re-sends a failed mail document directly via SendGrid and updates delivery records.
  */
 export async function resendMailDocument(originalDoc: MailDeliveryDoc): Promise<boolean> {
   try {
-    const targetDb = originalDoc.database === 'primary' ? db : defaultDb;
-    const senderCfg = getActiveSenderConfig();
+    const htmlContent = originalDoc.rawHtml || (originalDoc.htmlPreview ? `<p>${originalDoc.htmlPreview}</p>` : `<p>${originalDoc.subject}</p>`);
     
-    const newMailData: Record<string, any> = {
+    const result = await dispatchEmailNotification({
       to: originalDoc.to,
+      from: originalDoc.from,
       replyTo: originalDoc.replyTo || 'quinnledak@vastasports.com',
-      message: {
-        subject: originalDoc.subject,
-        html: originalDoc.htmlPreview ? `<p>${originalDoc.htmlPreview}</p>` : `<p>${originalDoc.subject}</p>`,
-        text: originalDoc.subject
-      },
-      createdAt: new Date().toISOString(),
-      source: 'vasta-dashboard-retry',
-      retriedFromDocId: originalDoc.id
-    };
+      subject: originalDoc.subject,
+      html: htmlContent,
+      category: originalDoc.category as EmailPayload['category'],
+      metadata: {
+        retriedFromDocId: originalDoc.id,
+        retriedAt: new Date().toISOString()
+      }
+    });
 
-    if (senderCfg.effectiveFrom) {
-      newMailData.from = senderCfg.effectiveFrom;
-    }
-    if (originalDoc.category) {
-      newMailData.category = originalDoc.category;
+    if (result.success) {
+      // Mark the original document as resolved / resent
+      try {
+        const targetDb = originalDoc.database === 'primary' ? db : defaultDb;
+        const mailRef = doc(targetDb, 'mail', originalDoc.id);
+        await updateDoc(mailRef, {
+          'delivery.state': 'SUCCESS',
+          'delivery.resolvedVia': 'sendgrid_direct_retry',
+          'delivery.newDocId': result.primaryDocId || result.defaultDocId,
+          retriedAt: new Date().toISOString()
+        });
+      } catch (updateErr) {
+        console.warn('Could not update original mail doc status:', updateErr);
+      }
+      return true;
     }
 
-    await addDoc(collection(targetDb, 'mail'), newMailData);
-    return true;
+    return false;
   } catch (err) {
     console.error('Error resending mail document:', err);
     return false;
@@ -363,13 +433,17 @@ export async function sendTestEmailAlert(toEmail: string): Promise<{
   if (!result.success) {
     return {
       success: false,
-      message: `Failed to write test email to Firestore: ${result.error || 'Unknown error'}`
+      message: `Failed to dispatch test email: ${result.error || 'Unknown error'}`
     };
   }
 
+  const deliveryMethod = result.directDelivered 
+    ? 'instantly delivered via SendGrid REST API' 
+    : 'queued in Firestore';
+
   return {
     success: true,
-    message: `Test email dispatched to ${cleanEmail}! Tracking doc: ${result.primaryDocId || result.defaultDocId}`,
+    message: `Test email ${deliveryMethod} to ${cleanEmail}! Tracking doc: ${result.primaryDocId || result.defaultDocId}`,
     primaryDocId: result.primaryDocId,
     defaultDocId: result.defaultDocId
   };
