@@ -96,7 +96,7 @@ async function startServer() {
         });
       }
 
-      const msg = {
+      const msg: any = {
         to: recipients.length === 1 ? recipients[0] : recipients,
         from: senderObj,
         subject: subject,
@@ -105,12 +105,36 @@ async function startServer() {
         ...(replyTo ? { replyTo } : {})
       };
 
-      const [sendgridResponse] = await sgMail.send(msg);
+      let sendgridResponse: any;
+      try {
+        const [res] = await sgMail.send(msg);
+        sendgridResponse = res;
+      } catch (sendErr: any) {
+        // If SendGrid rejects due to an unverified sender address, fallback to verified defaultFrom
+        const errBody = sendErr?.response?.body;
+        const errList = errBody?.errors?.map((e: any) => e.message).join(' ') || sendErr?.message || '';
+        const isSenderAuthError = /sender identity|verified|from address/i.test(errList);
+
+        if (isSenderAuthError && senderObj.email !== defaultFrom) {
+          console.warn(`Sender '${senderObj.email}' not verified on SendGrid. Retrying with verified default sender '${defaultFrom}'...`);
+          msg.from = {
+            name: senderObj.name || "Vasta Performance Training",
+            email: defaultFrom
+          };
+          if (!msg.replyTo) {
+            msg.replyTo = senderObj.email;
+          }
+          const [retryRes] = await sgMail.send(msg);
+          sendgridResponse = retryRes;
+        } else {
+          throw sendErr;
+        }
+      }
 
       return res.json({
         success: true,
-        statusCode: sendgridResponse.statusCode,
-        messageId: sendgridResponse.headers?.['x-message-id'] || `sg-${Date.now()}`
+        statusCode: sendgridResponse?.statusCode || 202,
+        messageId: sendgridResponse?.headers?.['x-message-id'] || `sg-${Date.now()}`
       });
     } catch (error: any) {
       console.error("SendGrid API Error:", error);

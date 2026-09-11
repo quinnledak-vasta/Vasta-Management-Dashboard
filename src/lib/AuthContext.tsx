@@ -54,7 +54,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       if (userDoc.exists()) {
         const uData = userDoc.data() as User;
-        const isOwner = firebaseUser.email?.toLowerCase().trim() === 'quinnledak@vastasports.com';
+        const userEmail = (firebaseUser.email || '').toLowerCase().trim();
+        const isOwner = userEmail === 'quinnledak@vastasports.com' || 
+                        userEmail === 'ericcorey@vastasports.com' || 
+                        userEmail === 'eric@vastasports.com';
         if (isOwner && uData.role !== 'owner') {
           const updatedUser: User = { ...uData, role: 'owner' };
           await setDoc(doc(db, 'users', firebaseUser.uid), { role: 'owner' }, { merge: true });
@@ -66,8 +69,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // 2. If not, check if they are invited
         const inviteDoc = await getDoc(doc(db, 'invites', firebaseUser.email?.toLowerCase() || ''));
         
-        // Special case for the owner
-        const isOwner = firebaseUser.email?.toLowerCase().trim() === 'quinnledak@vastasports.com';
+        // Special case for owners
+        const userEmail = (firebaseUser.email || '').toLowerCase().trim();
+        const isOwner = userEmail === 'quinnledak@vastasports.com' || 
+                        userEmail === 'ericcorey@vastasports.com' || 
+                        userEmail === 'eric@vastasports.com';
 
         if (inviteDoc.exists() || isOwner) {
           const inviteData = inviteDoc.data();

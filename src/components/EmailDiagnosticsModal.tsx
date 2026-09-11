@@ -240,7 +240,8 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
       const subMatch = (log.subject || '').toLowerCase();
       const fromMatch = (log.from || '').toLowerCase();
       const errMatch = (log.delivery?.error || '').toLowerCase();
-      return toMatch.includes(q) || subMatch.includes(q) || fromMatch.includes(q) || errMatch.includes(q);
+      const catMatch = (log.category || '').toLowerCase();
+      return toMatch.includes(q) || subMatch.includes(q) || fromMatch.includes(q) || errMatch.includes(q) || catMatch.includes(q);
     }
     return true;
   });
@@ -365,10 +366,11 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
     }
 
     if (delivery.state === 'SUCCESS') {
+      const isSendGrid = delivery.info?.provider === 'sendgrid_direct';
       return (
         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
           <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-          Delivered
+          {isSendGrid ? 'SendGrid Delivered' : 'Delivered'}
         </span>
       );
     }
@@ -912,8 +914,20 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                             <td className="py-2.5 px-3 font-medium text-slate-800 max-w-[170px] truncate" title={toFormatted}>
                               {toFormatted}
                             </td>
-                            <td className="py-2.5 px-3 text-slate-700 max-w-[220px] truncate" title={docItem.subject}>
-                              {docItem.subject}
+                            <td className="py-2.5 px-3 text-slate-700 max-w-[240px]" title={docItem.subject}>
+                              <div className="flex items-center gap-1.5 truncate">
+                                {docItem.category === 'restock_request' && (
+                                  <span className="shrink-0 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold text-[10px]">
+                                    Restock
+                                  </span>
+                                )}
+                                {docItem.category && docItem.category !== 'restock_request' && (
+                                  <span className="shrink-0 px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-medium text-[10px]">
+                                    {docItem.category.replace(/_/g, ' ')}
+                                  </span>
+                                )}
+                                <span className="truncate">{docItem.subject}</span>
+                              </div>
                             </td>
                             <td className="py-2.5 px-3 text-slate-500 max-w-[140px] truncate" title={docItem.from || 'Extension Default'}>
                               {docItem.from ? docItem.from.replace('Vasta Performance Training <', '').replace('>', '') : 'Default'}

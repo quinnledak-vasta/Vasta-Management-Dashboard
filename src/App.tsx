@@ -865,7 +865,8 @@ function AppContent() {
     targetLocation: string;
   }> => {
     const normLocation = normalizeLocationName(location);
-    const PRIMARY_OWNER_EMAIL = 'quinnledak@vastasports.com';
+    const OWNER_ERIC_EMAIL = 'ericcorey@vastasports.com';
+    const OWNER_QUINN_EMAIL = 'quinnledak@vastasports.com';
 
     const recipientMap = new Map<string, VacationAlertRecipient>();
     const managers: VacationAlertRecipient[] = [];
@@ -878,7 +879,7 @@ function AppContent() {
       if (!tEmail || !tEmail.includes('@')) return;
 
       if (t.role === 'admin' && tLoc === normLocation) {
-        const isOwnerEmail = tEmail === PRIMARY_OWNER_EMAIL;
+        const isOwnerEmail = tEmail === OWNER_QUINN_EMAIL || tEmail === OWNER_ERIC_EMAIL;
         const rec: VacationAlertRecipient = {
           name: t.name || 'Location Manager',
           email: tEmail,
@@ -902,7 +903,7 @@ function AppContent() {
           const dLoc = normalizeLocationName(d.location);
           const dEmail = (d.email || '').trim().toLowerCase();
           if (dEmail && dEmail.includes('@') && dLoc === normLocation && !recipientMap.has(dEmail)) {
-            const isOwnerEmail = dEmail === PRIMARY_OWNER_EMAIL;
+            const isOwnerEmail = dEmail === OWNER_QUINN_EMAIL || dEmail === OWNER_ERIC_EMAIL;
             const rec: VacationAlertRecipient = {
               name: d.name || 'Location Manager',
               email: dEmail,
@@ -918,37 +919,64 @@ function AppContent() {
       }
     }
 
-    // 3. Identify Owners
+    // 3. Identify Eric Corey (Owner)
+    const ericInTrainers = trainers.find(t => {
+      const tEmail = (t.email || '').trim().toLowerCase();
+      const tName = (t.name || '').toLowerCase();
+      return tEmail === OWNER_ERIC_EMAIL || 
+             tEmail === 'eric@vastasports.com' || 
+             tEmail === 'eric.corey@vastasports.com' ||
+             (tName.includes('eric') && tName.includes('corey'));
+    });
+    const ericEmail = ericInTrainers?.email?.trim().toLowerCase() || OWNER_ERIC_EMAIL;
+    const ericName = ericInTrainers?.name || 'Eric Corey';
+    const existingEric = recipientMap.get(ericEmail);
+    const ericRec: VacationAlertRecipient = {
+      name: `${ericName} (Owner)`,
+      email: ericEmail,
+      role: existingEric ? 'owner_and_manager' : 'owner',
+      label: existingEric ? `Owner & Location Manager (${normLocation})` : 'Owner'
+    };
+    if (!owners.some(o => o.email === ericEmail)) {
+      owners.push(ericRec);
+    }
+    recipientMap.set(ericEmail, ericRec);
+
+    // 4. Identify Quinn Ledak (Owner / Operations)
+    const quinnInTrainers = trainers.find(t => {
+      const tEmail = (t.email || '').trim().toLowerCase();
+      return tEmail === OWNER_QUINN_EMAIL;
+    });
+    const quinnEmail = OWNER_QUINN_EMAIL;
+    const quinnName = quinnInTrainers?.name || 'Quinn Ledak';
+    const existingQuinn = recipientMap.get(quinnEmail);
+    const quinnRec: VacationAlertRecipient = {
+      name: `${quinnName} (Owner)`,
+      email: quinnEmail,
+      role: existingQuinn ? 'owner_and_manager' : 'owner',
+      label: existingQuinn ? `Owner & Location Manager (${normLocation})` : 'Owner'
+    };
+    if (!owners.some(o => o.email === quinnEmail)) {
+      owners.push(quinnRec);
+    }
+    recipientMap.set(quinnEmail, quinnRec);
+
+    // 5. Any other users explicitly marked as owner in trainers state
     trainers.forEach(t => {
       const tEmail = (t.email || '').trim().toLowerCase();
       if (!tEmail || !tEmail.includes('@')) return;
 
-      if (t.role === 'owner' || tEmail === PRIMARY_OWNER_EMAIL) {
-        const existing = recipientMap.get(tEmail);
+      if (t.role === 'owner' && !recipientMap.has(tEmail)) {
         const rec: VacationAlertRecipient = {
-          name: t.name || 'Quinn Ledak (Owner)',
+          name: `${t.name || 'Owner'} (Owner)`,
           email: tEmail,
-          role: existing ? 'owner_and_manager' : 'owner',
-          label: existing ? `Owner & Location Manager (${normLocation})` : 'Owner'
+          role: 'owner',
+          label: 'Owner'
         };
-        if (!owners.some(o => o.email === tEmail)) {
-          owners.push(rec);
-        }
+        owners.push(rec);
         recipientMap.set(tEmail, rec);
       }
     });
-
-    // 4. Guaranteed Owner Fallback: Quinn Ledak must always be notified
-    if (!recipientMap.has(PRIMARY_OWNER_EMAIL)) {
-      const ownerFallback: VacationAlertRecipient = {
-        name: 'Quinn Ledak',
-        email: PRIMARY_OWNER_EMAIL,
-        role: 'owner',
-        label: 'Owner'
-      };
-      owners.push(ownerFallback);
-      recipientMap.set(PRIMARY_OWNER_EMAIL, ownerFallback);
-    }
 
     return {
       allRecipients: Array.from(recipientMap.values()),
@@ -3599,7 +3627,8 @@ function AppContent() {
   // Synchronous lookup for UI preview
   const getRestockRecipientsSync = (location: string) => {
     const normLocation = normalizeLocationName(location);
-    const PRIMARY_OWNER_EMAIL = 'quinnledak@vastasports.com';
+    const OWNER_ERIC_EMAIL = 'ericcorey@vastasports.com';
+    const OWNER_QUINN_EMAIL = 'quinnledak@vastasports.com';
 
     const recipientMap = new Map<string, RestockRecipient>();
     const managers: RestockRecipient[] = [];
@@ -3610,7 +3639,7 @@ function AppContent() {
       const tLoc = normalizeLocationName(t.location);
       const tEmail = (t.email || '').trim().toLowerCase();
       if (t.role === 'admin' && tLoc === normLocation && tEmail) {
-        const isOwnerEmail = tEmail === PRIMARY_OWNER_EMAIL;
+        const isOwnerEmail = tEmail === OWNER_QUINN_EMAIL || tEmail === OWNER_ERIC_EMAIL;
         const rec: RestockRecipient = {
           name: t.name || 'Location Manager',
           email: tEmail,
@@ -3624,35 +3653,62 @@ function AppContent() {
       }
     });
 
-    // 2. Identify Owners (Role 'owner' or email quinnledak@vastasports.com)
+    // 2. Identify Eric Corey (Owner)
+    const ericInTrainers = trainers.find(t => {
+      const tEmail = (t.email || '').trim().toLowerCase();
+      const tName = (t.name || '').toLowerCase();
+      return tEmail === OWNER_ERIC_EMAIL || 
+             tEmail === 'eric@vastasports.com' || 
+             tEmail === 'eric.corey@vastasports.com' ||
+             (tName.includes('eric') && tName.includes('corey'));
+    });
+    const ericEmail = ericInTrainers?.email?.trim().toLowerCase() || OWNER_ERIC_EMAIL;
+    const ericName = ericInTrainers?.name || 'Eric Corey';
+    const existingEric = recipientMap.get(ericEmail);
+    const ericRec: RestockRecipient = {
+      name: `${ericName} (Owner)`,
+      email: ericEmail,
+      role: existingEric ? 'owner_and_manager' : 'owner',
+      label: existingEric ? `Owner & Location Manager (${normLocation})` : 'Owner'
+    };
+    if (!owners.some(o => o.email === ericEmail)) {
+      owners.push(ericRec);
+    }
+    recipientMap.set(ericEmail, ericRec);
+
+    // 3. Identify Quinn Ledak (Owner / Director)
+    const quinnInTrainers = trainers.find(t => {
+      const tEmail = (t.email || '').trim().toLowerCase();
+      return tEmail === OWNER_QUINN_EMAIL;
+    });
+    const quinnEmail = OWNER_QUINN_EMAIL;
+    const quinnName = quinnInTrainers?.name || 'Quinn Ledak';
+    const existingQuinn = recipientMap.get(quinnEmail);
+    const quinnRec: RestockRecipient = {
+      name: `${quinnName} (Owner)`,
+      email: quinnEmail,
+      role: existingQuinn ? 'owner_and_manager' : 'owner',
+      label: existingQuinn ? `Owner & Location Manager (${normLocation})` : 'Owner'
+    };
+    if (!owners.some(o => o.email === quinnEmail)) {
+      owners.push(quinnRec);
+    }
+    recipientMap.set(quinnEmail, quinnRec);
+
+    // 4. Also include any other user explicitly marked with role 'owner' in trainers state
     trainers.forEach(t => {
       const tEmail = (t.email || '').trim().toLowerCase();
-      if ((t.role === 'owner' || tEmail === PRIMARY_OWNER_EMAIL) && tEmail) {
-        const existing = recipientMap.get(tEmail);
+      if (t.role === 'owner' && tEmail && !recipientMap.has(tEmail)) {
         const rec: RestockRecipient = {
-          name: t.name || 'Quinn Ledak (Owner)',
+          name: `${t.name || 'Owner'} (Owner)`,
           email: tEmail,
-          role: existing ? 'owner_and_manager' : 'owner',
-          label: existing ? `Owner & Location Manager (${normLocation})` : 'Owner'
+          role: 'owner',
+          label: 'Owner'
         };
-        if (!owners.some(o => o.email === tEmail)) {
-          owners.push(rec);
-        }
+        owners.push(rec);
         recipientMap.set(tEmail, rec);
       }
     });
-
-    // 3. Guaranteed Owner Fallback: Quinn Ledak must always be included
-    if (!recipientMap.has(PRIMARY_OWNER_EMAIL)) {
-      const ownerFallback: RestockRecipient = {
-        name: 'Quinn Ledak',
-        email: PRIMARY_OWNER_EMAIL,
-        role: 'owner',
-        label: 'Owner'
-      };
-      owners.push(ownerFallback);
-      recipientMap.set(PRIMARY_OWNER_EMAIL, ownerFallback);
-    }
 
     return {
       allRecipients: Array.from(recipientMap.values()),
@@ -3665,7 +3721,8 @@ function AppContent() {
   const getRestockRecipients = async (location: string) => {
     const syncRes = getRestockRecipientsSync(location);
     const normLocation = normalizeLocationName(location);
-    const PRIMARY_OWNER_EMAIL = 'quinnledak@vastasports.com';
+    const OWNER_ERIC_EMAIL = 'ericcorey@vastasports.com';
+    const OWNER_QUINN_EMAIL = 'quinnledak@vastasports.com';
 
     if (syncRes.managers.length === 0) {
       try {
@@ -3679,7 +3736,7 @@ function AppContent() {
           const dLoc = normalizeLocationName(d.location);
           const dEmail = (d.email || '').trim().toLowerCase();
           if (dEmail && dEmail.includes('@') && dLoc === normLocation && !recipientMap.has(dEmail)) {
-            const isOwnerEmail = dEmail === PRIMARY_OWNER_EMAIL;
+            const isOwnerEmail = dEmail === OWNER_QUINN_EMAIL || dEmail === OWNER_ERIC_EMAIL;
             const rec: RestockRecipient = {
               name: d.name || 'Location Manager',
               email: dEmail,
@@ -3745,7 +3802,9 @@ function AppContent() {
       const ownerSummaryText = owners.map(o => `${o.name} (${o.email})`).join(', ');
 
       let successCount = 0;
+      let directSendGridCount = 0;
       const sendErrors: string[] = [];
+      const userReplyTo = (user.email && user.email.includes('@')) ? user.email : 'quinnledak@vastasports.com';
 
       for (const recipient of allRecipients) {
         try {
@@ -3798,19 +3857,24 @@ function AppContent() {
 
           const dispatchRes = await dispatchEmailNotification({
             to: recipient.email,
-            replyTo: 'quinnledak@vastasports.com',
+            replyTo: userReplyTo,
             subject: cleanSubject,
             html: restockHtml,
             category: 'restock_request',
             metadata: {
               location: selectedRestockLocation,
               submittedBy: user.name,
-              itemCount: itemsRequested.length
+              submittedByEmail: user.email || '',
+              itemCount: itemsRequested.length,
+              provider: 'sendgrid'
             }
           });
 
           if (dispatchRes.success) {
             successCount++;
+            if (dispatchRes.directDelivered) {
+              directSendGridCount++;
+            }
           } else {
             sendErrors.push(recipient.email);
           }
@@ -3821,7 +3885,8 @@ function AppContent() {
       }
 
       if (successCount > 0) {
-        let successMsg = `Restock request sent to Owner (${ownerSummaryText})`;
+        const sendgridTag = directSendGridCount > 0 ? " via SendGrid" : "";
+        let successMsg = `Restock request dispatched${sendgridTag} to Owner (${ownerSummaryText})`;
         if (managers.length > 0) {
           successMsg += ` and Location Manager (${managerSummaryText})`;
         } else {
@@ -4728,12 +4793,18 @@ function AppContent() {
             <Dialog open={isRestockRequestOpen} onOpenChange={setIsRestockRequestOpen}>
               <DialogContent className="sm:max-w-[600px] max-h-[85vh] flex flex-col">
                 <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2">
-                    <ShoppingCart className="w-5 h-5 text-red-600" />
-                    Request Inventory Restock
+                  <DialogTitle className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <ShoppingCart className="w-5 h-5 text-red-600" />
+                      <span>Request Inventory Restock</span>
+                    </div>
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      SendGrid Active
+                    </span>
                   </DialogTitle>
                   <DialogDescription>
-                    Select a location and choose the items you want to request a restock for. An email alert will be sent to the location manager and owner.
+                    Select a location and choose the items you want to request a restock for. Email alerts are dispatched directly via SendGrid to the location manager and owner.
                   </DialogDescription>
                 </DialogHeader>
 
@@ -6216,7 +6287,7 @@ function AppContent() {
                                     : <span className="text-amber-700 font-medium italic">None assigned yet (routes to Owner)</span>}
                                 </div>
                                 <div>
-                                  <strong className="text-slate-700">Owner:</strong> Quinn Ledak (quinnledak@vastasports.com)
+                                  <strong className="text-slate-700">Owner(s):</strong> Eric Corey (ericcorey@vastasports.com), Quinn Ledak (quinnledak@vastasports.com)
                                 </div>
                               </div>
                             </div>

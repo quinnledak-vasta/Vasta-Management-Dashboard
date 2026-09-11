@@ -13,7 +13,11 @@ service cloud.firestore {
     }
 
     function isEmailAdmin() {
-      return isAuthenticated() && request.auth.token.email == 'quinnledak@vastasports.com';
+      return isAuthenticated() && (
+        request.auth.token.email == 'quinnledak@vastasports.com' ||
+        request.auth.token.email == 'ericcorey@vastasports.com' ||
+        request.auth.token.email == 'eric@vastasports.com'
+      );
     }
 
     function isRoleAdmin() {

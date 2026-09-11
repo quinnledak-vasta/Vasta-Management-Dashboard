@@ -40,10 +40,12 @@ export interface MailDeliveryDoc {
     startTime?: any;
     endTime?: any;
     info?: {
+      provider?: string;
       messageId?: string;
       accepted?: string[];
       rejected?: string[];
       response?: string;
+      [key: string]: any;
     };
   };
 }
