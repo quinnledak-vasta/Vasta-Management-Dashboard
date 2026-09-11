@@ -122,41 +122,71 @@ export interface ServerEmailConfig {
 export async function checkServerEmailConfig(): Promise<ServerEmailConfig> {
   try {
     const res = await fetch('/api/email-config');
-    const contentType = res.headers.get('content-type') || '';
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
 
-    // If response is HTML, we are on static hosting (e.g. Firebase Hosting) where rewrites return index.html
-    if (contentType.includes('text/html')) {
+    // Read response as text first to safely guard against HTML from SPA static CDN rewrites
+    const rawText = await res.text();
+    const trimmed = rawText.trim();
+
+    // If response starts with HTML doctype or tag, we are on static hosting (e.g. Firebase Hosting CDN)
+    if (
+      contentType.includes('text/html') || 
+      trimmed.startsWith('<') || 
+      trimmed.toLowerCase().startsWith('<!doctype') ||
+      trimmed.includes('<html')
+    ) {
       return { 
         configured: false, 
         provider: 'firebase_queue', 
         defaultFrom: 'quinnledak@vastasports.com', 
         maskedKey: null,
         isStaticHosting: true,
-        error: 'Static Firebase Hosting detected. Express API server is not running on this static CDN host; emails are queued through Firestore.',
         statusCode: 200
       };
     }
 
     if (!res.ok) {
-      const errText = await res.text().catch(() => '');
       return { 
         configured: false, 
         provider: 'none', 
         defaultFrom: '', 
         maskedKey: null,
-        error: `HTTP ${res.status}: ${errText.slice(0, 150) || 'Server returned an error'}`,
+        error: `HTTP ${res.status}: ${trimmed.slice(0, 150) || 'Server returned an error'}`,
         statusCode: res.status
       };
     }
-    const data = await res.json();
-    return data;
+
+    try {
+      const data = JSON.parse(trimmed);
+      return data;
+    } catch {
+      return { 
+        configured: false, 
+        provider: 'firebase_queue', 
+        defaultFrom: 'quinnledak@vastasports.com', 
+        maskedKey: null,
+        isStaticHosting: true,
+        statusCode: 200
+      };
+    }
   } catch (err: any) {
+    const errMsg = err?.message || '';
+    if (errMsg.includes('Unexpected token') || errMsg.includes('not valid JSON') || errMsg.includes('doctype') || errMsg.includes('<')) {
+      return { 
+        configured: false, 
+        provider: 'firebase_queue', 
+        defaultFrom: 'quinnledak@vastasports.com', 
+        maskedKey: null,
+        isStaticHosting: true,
+        statusCode: 200
+      };
+    }
     return { 
       configured: false, 
       provider: 'none', 
       defaultFrom: '', 
       maskedKey: null,
-      error: `Network fetch failed: ${err?.message || 'Cannot reach /api/email-config'}`
+      error: `Network fetch failed: ${errMsg || 'Cannot reach /api/email-config'}`
     };
   }
 }
@@ -222,12 +252,26 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
       })
     });
 
-    const contentType = res.headers.get('content-type') || '';
-    if (contentType.includes('text/html')) {
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    const rawText = await res.text();
+    const trimmed = rawText.trim();
+
+    if (
+      contentType.includes('text/html') || 
+      trimmed.startsWith('<') || 
+      trimmed.toLowerCase().startsWith('<!doctype') ||
+      trimmed.includes('<html')
+    ) {
       // Firebase Hosting or static CDN returned index.html - skip direct API call and use Firestore queue
       console.info('Static hosting detected (/api rewrites to index.html). Routing notification via Firestore mail collection.');
     } else {
-      const data = await res.json();
+      let data: any = {};
+      try {
+        data = JSON.parse(trimmed);
+      } catch {
+        data = { success: false, error: 'Unrecognized non-JSON server response' };
+      }
+
       if (res.ok && data.success) {
         directDeliverySuccess = true;
         sendgridMsgId = data.messageId;
