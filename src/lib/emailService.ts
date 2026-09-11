@@ -100,21 +100,48 @@ export function setActiveSenderConfig(mode: SenderMode, customValue?: string): v
   }
 }
 
-/**
- * Checks backend server email configuration (SendGrid API key status)
- */
-export async function checkServerEmailConfig(): Promise<{
+export interface ServerEmailConfig {
   configured: boolean;
   provider: string;
   defaultFrom: string;
   maskedKey: string | null;
-}> {
+  source?: string;
+  detectedKeys?: string[];
+  formatValid?: boolean;
+  quotesStripped?: boolean;
+  env?: string;
+  serverTime?: string;
+  error?: string;
+  statusCode?: number;
+}
+
+/**
+ * Checks backend server email configuration (SendGrid API key status)
+ */
+export async function checkServerEmailConfig(): Promise<ServerEmailConfig> {
   try {
     const res = await fetch('/api/email-config');
-    if (!res.ok) return { configured: false, provider: 'none', defaultFrom: '', maskedKey: null };
-    return await res.json();
-  } catch {
-    return { configured: false, provider: 'none', defaultFrom: '', maskedKey: null };
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      return { 
+        configured: false, 
+        provider: 'none', 
+        defaultFrom: '', 
+        maskedKey: null,
+        error: `HTTP ${res.status}: ${errText.slice(0, 150) || 'Server returned an error'}`,
+        statusCode: res.status
+      };
+    }
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    return { 
+      configured: false, 
+      provider: 'none', 
+      defaultFrom: '', 
+      maskedKey: null,
+      error: `Network fetch failed: ${err?.message || 'Cannot reach /api/email-config'}`
+    };
   }
 }
 

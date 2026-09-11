@@ -30,6 +30,7 @@ import {
   getActiveSenderConfig,
   setActiveSenderConfig,
   checkServerEmailConfig,
+  ServerEmailConfig,
   SenderMode,
   MailDeliveryDoc 
 } from '../lib/emailService';
@@ -179,22 +180,32 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'error' | 'success' | 'queued'>('all');
   const [senderConfig, setSenderConfig] = useState(getActiveSenderConfig());
-  const [serverConfig, setServerConfig] = useState<{
-    configured: boolean;
-    provider: string;
-    defaultFrom: string;
-    maskedKey: string | null;
-  } | null>(null);
+  const [serverConfig, setServerConfig] = useState<ServerEmailConfig | null>(null);
+  const [checkingConfig, setCheckingConfig] = useState(false);
+  const [showSecretHelp, setShowSecretHelp] = useState(false);
 
   const mainScrollRef = useRef<HTMLDivElement>(null);
   const logsSectionRef = useRef<HTMLDivElement>(null);
 
-  const checkConfig = async () => {
+  const checkConfig = async (notify = false) => {
+    setCheckingConfig(true);
     try {
       const cfg = await checkServerEmailConfig();
       setServerConfig(cfg);
-    } catch (e) {
+      if (notify) {
+        if (cfg.configured) {
+          toast.success(`SendGrid connected! (${cfg.maskedKey || 'Key Active'})`);
+        } else if (cfg.error) {
+          toast.error(`Backend check failed: ${cfg.error}`);
+        } else {
+          toast.warning('SENDGRID_API_KEY was not detected on the server.');
+        }
+      }
+    } catch (e: any) {
       console.warn('Failed to check server email config:', e);
+      if (notify) toast.error(`Connection check failed: ${e?.message || e}`);
+    } finally {
+      setCheckingConfig(false);
     }
   };
 
@@ -511,9 +522,21 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                 </div>
                 <div>
-                  <p className="font-bold text-emerald-950">SendGrid Direct Pipeline Connected</p>
-                  <p className="text-emerald-800 text-[11px]">
-                    Notifications are sent immediately via SendGrid API. Google Cloud billing locks and Google Workspace SMTP limits are bypassed.
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-emerald-950">SendGrid Direct Pipeline Connected</p>
+                    {serverConfig.maskedKey && (
+                      <span className="font-mono text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded border border-emerald-200">
+                        {serverConfig.maskedKey}
+                      </span>
+                    )}
+                    {serverConfig.source && (
+                      <span className="text-[10px] text-emerald-700 bg-white/80 px-1.5 py-0.5 rounded border border-emerald-200">
+                        from {serverConfig.source}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-emerald-800 text-[11px] mt-0.5">
+                    Notifications are dispatched immediately via SendGrid REST API. Bypasses Google Cloud billing locks and Gmail SMTP rate limits.
                   </p>
                 </div>
               </div>
@@ -521,6 +544,15 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                 <span className="text-[11px] font-medium text-emerald-900 bg-white/90 px-2.5 py-1 rounded-md border border-emerald-200 shadow-2xs">
                   Sender: <strong>{serverConfig.defaultFrom}</strong>
                 </span>
+                <button
+                  onClick={() => checkConfig(true)}
+                  disabled={checkingConfig}
+                  className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-md font-medium text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                  title="Verify backend connection and key status"
+                >
+                  <RefreshCw className={`w-3 h-3 ${checkingConfig ? 'animate-spin' : ''}`} />
+                  <span>Re-check</span>
+                </button>
                 {failedLogs.length > 0 && (
                   <button
                     onClick={handleRetryAllFailed}
@@ -534,18 +566,72 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
               </div>
             </div>
           ) : serverConfig && !serverConfig.configured ? (
-            <div className="px-6 py-3 bg-amber-50/90 border-b border-amber-200 flex items-center justify-between text-xs text-amber-950">
-              <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 border border-amber-200">
-                  <AlertTriangle className="w-4 h-4 text-amber-600" />
+            <div className="px-6 py-3.5 bg-amber-50/95 border-b border-amber-200 text-xs text-amber-950 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 border border-amber-200">
+                    <AlertTriangle className="w-4 h-4 text-amber-600" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-amber-950">SendGrid API Key Not Detected on Backend Server</p>
+                      {serverConfig.env && (
+                        <span className="text-[10px] uppercase font-semibold tracking-wide px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-900">
+                          {serverConfig.env}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-amber-800 text-[11px] mt-0.5">
+                      {serverConfig.error 
+                        ? `Backend check status: ${serverConfig.error}`
+                        : serverConfig.detectedKeys && serverConfig.detectedKeys.length > 0
+                        ? `Found environment key(s): ${serverConfig.detectedKeys.join(', ')} — verifying format...`
+                        : "No matching SENDGRID_API_KEY environment variable was detected by the server."}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="font-bold text-amber-950">SendGrid API Key Not Detected</p>
-                  <p className="text-amber-800 text-[11px]">
-                    Ensure <code className="font-mono bg-amber-100 px-1 py-0.5 rounded text-amber-900">SENDGRID_API_KEY</code> is saved in AI Studio <strong>Settings &gt; Secrets</strong>.
-                  </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => checkConfig(true)}
+                    disabled={checkingConfig}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${checkingConfig ? 'animate-spin' : ''}`} />
+                    <span>{checkingConfig ? 'Checking...' : 'Re-check Connection'}</span>
+                  </button>
+                  <button
+                    onClick={() => setShowSecretHelp(!showSecretHelp)}
+                    className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg font-semibold text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <Key className="w-3.5 h-3.5 text-amber-700" />
+                    <span>{showSecretHelp ? 'Hide Guide' : 'How to Fix'}</span>
+                  </button>
                 </div>
               </div>
+
+              {/* Collapsible troubleshooting explanation */}
+              {showSecretHelp && (
+                <div className="p-3.5 bg-white/90 border border-amber-200 rounded-lg text-slate-700 space-y-2 mt-2">
+                  <h4 className="font-bold text-slate-900 flex items-center gap-1.5">
+                    <Key className="w-3.5 h-3.5 text-amber-600" />
+                    Connecting SendGrid to your Live / Deployed App
+                  </h4>
+                  <ol className="list-decimal pl-4 space-y-1.5 text-[11px] text-slate-600">
+                    <li>
+                      <strong>Check the Secret Name:</strong> In AI Studio, open <strong>Settings &gt; Secrets</strong>. The secret name must be <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-900">SENDGRID_API_KEY</code> (or <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-900">SENDGRID_KEY</code>).
+                    </li>
+                    <li>
+                      <strong>Check the Value Format:</strong> Ensure you did NOT paste quotation marks around the key. The value should begin directly with <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-900">SG.</code> (e.g. <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-900">SG.2jX...</code>, <em>not</em> <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-900">"SG.2jX..."</code>).
+                    </li>
+                    <li>
+                      <strong>Live / Shared App vs. Development:</strong> In Google AI Studio, secrets added or updated in <em>Settings &gt; Secrets</em> are available immediately in the development workspace, but shared apps and production deployments inherit secrets at deployment time. If you added the secret recently, re-share or rebuild the app.
+                    </li>
+                    <li>
+                      <strong>Cloud Run Custom Deployments:</strong> If you deployed this service into Google Cloud Run directly, open Google Cloud Console &gt; Cloud Run &gt; Edit Revision &gt; Variables &amp; Secrets &gt; add <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-900">SENDGRID_API_KEY</code>.
+                    </li>
+                  </ol>
+                </div>
+              )}
             </div>
           ) : null}
 

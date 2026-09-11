@@ -6,13 +6,119 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Helper to resolve SendGrid API key flexibly regardless of casing
-function getSendGridApiKey(): string {
-  const found = Object.entries(process.env).find(([k]) => {
-    const norm = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-    return norm === 'sendgridapikey' || norm === 'sendgridkey';
-  });
-  return (found ? found[1] : process.env.SENDGRID_API_KEY || '')?.trim() || '';
+interface SendGridKeyResolution {
+  key: string;
+  source: string;
+  masked: string | null;
+  detectedKeys: string[];
+  quotesStripped: boolean;
+  formatValid: boolean;
+}
+
+function sanitizeApiKey(raw: string | undefined | null): { key: string; quotesStripped: boolean } {
+  if (!raw) return { key: '', quotesStripped: false };
+  let val = raw.trim();
+  let quotesStripped = false;
+  // Strip surrounding quotes ("..." or '...')
+  if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+    val = val.slice(1, -1).trim();
+    quotesStripped = true;
+  }
+  // Strip accidental 'Bearer ' prefix
+  if (val.toLowerCase().startsWith('bearer ')) {
+    val = val.slice(7).trim();
+  }
+  return { key: val, quotesStripped };
+}
+
+// Helper to resolve SendGrid API key flexibly regardless of casing, quoting, or exact variable naming
+function resolveSendGridApiKey(): SendGridKeyResolution {
+  const envEntries = Object.entries(process.env);
+  const detectedKeys: string[] = [];
+
+  // 1. Identify all potential environment keys
+  for (const [k, v] of envEntries) {
+    if (typeof v === 'string' && v.trim().length > 0) {
+      const lower = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (lower.includes('sendgrid') || lower.includes('sgapi') || lower === 'sgkey') {
+        detectedKeys.push(k);
+      }
+    }
+  }
+
+  // 2. Check prioritized common variable names
+  const priorityNames = [
+    'SENDGRID_API_KEY',
+    'SendGrid_API_KEY',
+    'sendgrid_api_key',
+    'SENDGRID_KEY',
+    'SendGrid_KEY',
+    'SENDGRID_API_TOKEN',
+    'SENDGRID_TOKEN',
+    'SENDGRID_SECRET',
+    'SENDGRID',
+    'SG_API_KEY',
+    'SEND_GRID_API_KEY',
+    'VITE_SENDGRID_API_KEY'
+  ];
+
+  for (const name of priorityNames) {
+    const raw = process.env[name];
+    const { key, quotesStripped } = sanitizeApiKey(raw);
+    if (key && key.length > 10) {
+      return {
+        key,
+        source: name,
+        masked: `${key.slice(0, 7)}...${key.slice(-4)}`,
+        detectedKeys,
+        quotesStripped,
+        formatValid: key.startsWith('SG.')
+      };
+    }
+  }
+
+  // 3. Check fuzzy matched keys from detectedKeys
+  for (const name of detectedKeys) {
+    const raw = process.env[name];
+    const { key, quotesStripped } = sanitizeApiKey(raw);
+    if (key && key.length > 10) {
+      return {
+        key,
+        source: name,
+        masked: `${key.slice(0, 7)}...${key.slice(-4)}`,
+        detectedKeys,
+        quotesStripped,
+        formatValid: key.startsWith('SG.')
+      };
+    }
+  }
+
+  // 4. Scan all env values for canonical SendGrid API key pattern ('SG....' length > 20)
+  for (const [k, v] of envEntries) {
+    if (typeof v === 'string') {
+      const { key, quotesStripped } = sanitizeApiKey(v);
+      if (key.startsWith('SG.') && key.length > 20) {
+        if (!detectedKeys.includes(k)) detectedKeys.push(k);
+        return {
+          key,
+          source: k,
+          masked: `${key.slice(0, 7)}...${key.slice(-4)}`,
+          detectedKeys,
+          quotesStripped,
+          formatValid: true
+        };
+      }
+    }
+  }
+
+  return {
+    key: '',
+    source: 'none',
+    masked: null,
+    detectedKeys,
+    quotesStripped: false,
+    formatValid: false
+  };
 }
 
 async function startServer() {
@@ -31,26 +137,33 @@ async function startServer() {
 
   // Email status endpoint - checks if SendGrid is configured
   app.get("/api/email-config", (_req, res) => {
-    const apiKey = getSendGridApiKey();
-    const hasApiKey = Boolean(apiKey && apiKey.length > 10);
+    const resolution = resolveSendGridApiKey();
+    const hasApiKey = Boolean(resolution.key && resolution.key.length > 10);
     const defaultFrom = process.env.SENDGRID_FROM_EMAIL || "quinnledak@vastasports.com";
 
     res.json({
       configured: hasApiKey,
       provider: "sendgrid",
       defaultFrom,
-      maskedKey: hasApiKey ? `${apiKey.slice(0, 7)}...${apiKey.slice(-4)}` : null
+      maskedKey: resolution.masked,
+      source: resolution.source,
+      detectedKeys: resolution.detectedKeys,
+      formatValid: resolution.formatValid,
+      quotesStripped: resolution.quotesStripped,
+      env: process.env.NODE_ENV || 'development',
+      serverTime: new Date().toISOString()
     });
   });
 
   // Send email directly through SendGrid
   app.post("/api/send-email", async (req, res) => {
-    const apiKey = getSendGridApiKey();
+    const resolution = resolveSendGridApiKey();
 
-    if (!apiKey || !apiKey.trim()) {
+    if (!resolution.key) {
       return res.status(503).json({
         success: false,
-        error: "SENDGRID_API_KEY environment variable is not configured. Please add SENDGRID_API_KEY to your project Settings > Secrets."
+        error: "SENDGRID_API_KEY environment variable is not configured. Please add SENDGRID_API_KEY to your project Settings > Secrets.",
+        detectedKeys: resolution.detectedKeys
       });
     }
 
@@ -64,7 +177,7 @@ async function startServer() {
     }
 
     try {
-      sgMail.setApiKey(apiKey.trim());
+      sgMail.setApiKey(resolution.key);
 
       // Parse sender into clean { email, name } object accepted by SendGrid
       const defaultFrom = process.env.SENDGRID_FROM_EMAIL || "quinnledak@vastasports.com";
