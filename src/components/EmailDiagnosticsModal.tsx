@@ -457,12 +457,19 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold border ${
                   serverConfig.configured 
                     ? 'bg-emerald-50 text-emerald-800 border-emerald-300' 
+                    : serverConfig.isStaticHosting
+                    ? 'bg-blue-50 text-blue-800 border-blue-300'
                     : 'bg-amber-50 text-amber-800 border-amber-300'
                 }`}>
                   {serverConfig.configured ? (
                     <>
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                       <span>SendGrid Direct: Active</span>
+                    </>
+                  ) : serverConfig.isStaticHosting ? (
+                    <>
+                      <Server className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Firebase Hosting (Firestore Queue)</span>
                     </>
                   ) : (
                     <>
@@ -564,6 +571,61 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                   </button>
                 )}
               </div>
+            </div>
+          ) : serverConfig && serverConfig.isStaticHosting ? (
+            <div className="px-6 py-3.5 bg-blue-50/95 border-b border-blue-200 text-xs text-blue-950 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center shrink-0 border border-blue-200">
+                    <Server className="w-4 h-4 text-blue-600" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-blue-950">Firebase Hosting Live Site (Firestore Queue Mode)</p>
+                      <span className="text-[10px] uppercase font-semibold tracking-wide px-1.5 py-0.5 rounded bg-blue-200/80 text-blue-900">
+                        Static CDN
+                      </span>
+                    </div>
+                    <p className="text-blue-800 text-[11px] mt-0.5">
+                      Your live site is hosted as a static application on Firebase Hosting. Outgoing email documents are recorded directly to Firestore's <code className="font-mono bg-blue-100/80 px-1 py-0.5 rounded">mail</code> collection for delivery.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => checkConfig(true)}
+                    disabled={checkingConfig}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${checkingConfig ? 'animate-spin' : ''}`} />
+                    <span>{checkingConfig ? 'Checking...' : 'Re-check Connection'}</span>
+                  </button>
+                  <button
+                    onClick={() => setShowSecretHelp(!showSecretHelp)}
+                    className="px-3 py-1.5 bg-white hover:bg-blue-100 text-blue-900 border border-blue-300 rounded-lg font-semibold text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <HelpCircle className="w-3.5 h-3.5 text-blue-700" />
+                    <span>{showSecretHelp ? 'Hide Info' : 'How It Works'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {showSecretHelp && (
+                <div className="p-3.5 bg-white/90 border border-blue-200 rounded-lg text-slate-700 space-y-2 mt-2">
+                  <h4 className="font-bold text-slate-900 flex items-center gap-1.5">
+                    <Server className="w-3.5 h-3.5 text-blue-600" />
+                    Understanding Live Delivery on Firebase Hosting
+                  </h4>
+                  <p className="text-[11px] text-slate-600">
+                    Firebase Hosting serves the frontend as static files. When an alert or restock request is generated on your live site:
+                  </p>
+                  <ol className="list-decimal pl-4 space-y-1 text-[11px] text-slate-600">
+                    <li>The app writes a document directly to the <code className="font-mono bg-slate-100 px-1 rounded">mail</code> collection in Firestore (both primary and default databases).</li>
+                    <li>If you have the <strong>Firebase "Trigger Email" Extension</strong> installed in your Firebase Console, it automatically picks up the Firestore document and dispatches it via SendGrid or SMTP.</li>
+                    <li>In the development preview or Cloud Run container, the Express server handles direct SendGrid API calls immediately.</li>
+                  </ol>
+                </div>
+              )}
             </div>
           ) : serverConfig && !serverConfig.configured ? (
             <div className="px-6 py-3.5 bg-amber-50/95 border-b border-amber-200 text-xs text-amber-950 space-y-2">

@@ -113,6 +113,7 @@ export interface ServerEmailConfig {
   serverTime?: string;
   error?: string;
   statusCode?: number;
+  isStaticHosting?: boolean;
 }
 
 /**
@@ -121,6 +122,21 @@ export interface ServerEmailConfig {
 export async function checkServerEmailConfig(): Promise<ServerEmailConfig> {
   try {
     const res = await fetch('/api/email-config');
+    const contentType = res.headers.get('content-type') || '';
+
+    // If response is HTML, we are on static hosting (e.g. Firebase Hosting) where rewrites return index.html
+    if (contentType.includes('text/html')) {
+      return { 
+        configured: false, 
+        provider: 'firebase_queue', 
+        defaultFrom: 'quinnledak@vastasports.com', 
+        maskedKey: null,
+        isStaticHosting: true,
+        error: 'Static Firebase Hosting detected. Express API server is not running on this static CDN host; emails are queued through Firestore.',
+        statusCode: 200
+      };
+    }
+
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
       return { 
@@ -206,28 +222,34 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
       })
     });
 
-    const data = await res.json();
-    if (res.ok && data.success) {
-      directDeliverySuccess = true;
-      sendgridMsgId = data.messageId;
-      mailDocData.delivery = {
-        state: 'SUCCESS',
-        attempts: 1,
-        startTime: new Date().toISOString(),
-        endTime: new Date().toISOString(),
-        info: {
-          provider: 'sendgrid_direct',
-          messageId: sendgridMsgId || `sg-${Date.now()}`
-        }
-      };
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      // Firebase Hosting or static CDN returned index.html - skip direct API call and use Firestore queue
+      console.info('Static hosting detected (/api rewrites to index.html). Routing notification via Firestore mail collection.');
     } else {
-      directError = data.error || `HTTP ${res.status}: Failed to send via SendGrid`;
-      mailDocData.delivery = {
-        state: 'ERROR',
-        attempts: 1,
-        error: directError,
-        endTime: new Date().toISOString()
-      };
+      const data = await res.json();
+      if (res.ok && data.success) {
+        directDeliverySuccess = true;
+        sendgridMsgId = data.messageId;
+        mailDocData.delivery = {
+          state: 'SUCCESS',
+          attempts: 1,
+          startTime: new Date().toISOString(),
+          endTime: new Date().toISOString(),
+          info: {
+            provider: 'sendgrid_direct',
+            messageId: sendgridMsgId || `sg-${Date.now()}`
+          }
+        };
+      } else {
+        directError = data.error || `HTTP ${res.status}: Failed to send via SendGrid`;
+        mailDocData.delivery = {
+          state: 'ERROR',
+          attempts: 1,
+          error: directError,
+          endTime: new Date().toISOString()
+        };
+      }
     }
   } catch (netErr: any) {
     console.warn('Direct SendGrid call bypassed/network error, writing to Firestore queue:', netErr);
