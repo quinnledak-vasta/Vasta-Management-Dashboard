@@ -7,7 +7,8 @@ import {
   limit, 
   updateDoc, 
   doc, 
-  deleteDoc 
+  deleteDoc,
+  deleteField
 } from 'firebase/firestore';
 import { db, defaultDb, isCustomDatabase, firestoreDatabaseId } from './firebase';
 
@@ -103,6 +104,14 @@ export function setActiveSenderConfig(mode: SenderMode, customValue?: string): v
 export interface ServerEmailConfig {
   configured: boolean;
   provider: string;
+  hasGoogleWorkspace?: boolean;
+  hasSendGrid?: boolean;
+  googleConfig?: {
+    configured: boolean;
+    user: string;
+    masked: string | null;
+    source: string;
+  };
   defaultFrom: string;
   maskedKey: string | null;
   source?: string;
@@ -369,8 +378,14 @@ export async function fetchMailDeliveryLogs(maxRecords = 25): Promise<MailDelive
   };
 
   try {
-    const q1 = query(collection(db, 'mail'), limit(maxRecords));
-    const snap1 = await getDocs(q1);
+    let snap1;
+    try {
+      const q1 = query(collection(db, 'mail'), orderBy('createdAt', 'desc'), limit(maxRecords));
+      snap1 = await getDocs(q1);
+    } catch {
+      const fallbackQ1 = query(collection(db, 'mail'), limit(maxRecords));
+      snap1 = await getDocs(fallbackQ1);
+    }
     parseDocs(snap1, 'primary');
   } catch (err) {
     console.warn('Could not read mail from primary database:', err);
@@ -378,8 +393,14 @@ export async function fetchMailDeliveryLogs(maxRecords = 25): Promise<MailDelive
 
   if (isCustomDatabase) {
     try {
-      const q2 = query(collection(defaultDb, 'mail'), limit(maxRecords));
-      const snap2 = await getDocs(q2);
+      let snap2;
+      try {
+        const q2 = query(collection(defaultDb, 'mail'), orderBy('createdAt', 'desc'), limit(maxRecords));
+        snap2 = await getDocs(q2);
+      } catch {
+        const fallbackQ2 = query(collection(defaultDb, 'mail'), limit(maxRecords));
+        snap2 = await getDocs(fallbackQ2);
+      }
       parseDocs(snap2, 'default');
     } catch (err) {
       console.warn('Could not read mail from default database:', err);
@@ -401,9 +422,9 @@ export async function retryMailDelivery(mailId: string, databaseType: 'primary' 
   try {
     const targetDb = databaseType === 'primary' ? db : defaultDb;
     const mailRef = doc(targetDb, 'mail', mailId);
+    // Removing the delivery field allows the Trigger Email extension to pick it up as a fresh message
     await updateDoc(mailRef, {
-      'delivery.state': 'PENDING',
-      'delivery.attempts': 0,
+      delivery: deleteField(),
       retriedAt: new Date().toISOString()
     });
     return true;
@@ -536,8 +557,8 @@ export async function sendTestEmailAlert(toEmail: string): Promise<{
   }
 
   const deliveryMethod = result.directDelivered 
-    ? 'instantly delivered via SendGrid REST API' 
-    : 'queued in Firestore';
+    ? 'instantly delivered via direct backend server' 
+    : 'queued in Firestore for Google Workspace / Firebase Extension delivery';
 
   return {
     success: true,

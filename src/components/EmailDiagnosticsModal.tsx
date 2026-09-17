@@ -86,17 +86,30 @@ function analyzeSmtpError(errorStr?: string): SmtpAnalysis {
   // 1. Password / Authentication errors
   if (
     lower.includes('535') || 
+    lower.includes('401') ||
+    lower.includes('unauthorized') ||
+    lower.includes('wrong credentials') ||
+    lower.includes('permission denied') ||
     lower.includes('eauth') || 
     lower.includes('badcredentials') || 
     lower.includes('username and password not accepted') || 
     lower.includes('invalid credentials') ||
     lower.includes('invalid login')
   ) {
+    const isSendgrid = lower.includes('401') || lower.includes('wrong credentials') || lower.includes('permission denied');
     return {
       type: 'auth',
-      title: 'Authentication Rejected (Google App Password Required)',
-      explanation: 'Your mail server rejected the login credentials. If you are using Gmail or Google Workspace (@vastasports.com), Google strictly forbids using your regular login password for SMTP. You must create a dedicated 16-character Google App Password.',
-      steps: [
+      title: isSendgrid ? 'SendGrid Authentication Failed (HTTP 401 / Wrong Credentials)' : 'Authentication Rejected (Invalid Credentials)',
+      explanation: isSendgrid 
+        ? 'Your email provider (SendGrid or SMTP relay) rejected the authentication credentials with HTTP 401 / Wrong Credentials. In SendGrid, the username MUST be the exact word "apikey" and the password must be an active SendGrid API key starting with "SG." with Mail Send permissions.'
+        : 'Your mail server rejected the login credentials. If you are using Gmail or Google Workspace (@vastasports.com), Google strictly forbids using your regular login password for SMTP. You must create a dedicated 16-character Google App Password.',
+      steps: isSendgrid ? [
+        '1. If using SendGrid SMTP URI in Firebase Extension: Verify the URI starts with smtps://apikey:SG.xxxx@smtp.sendgrid.net:465 (the username must literally be "apikey", NOT your login email address).',
+        '2. Verify that your SendGrid API key has "Full Access" or at least "Mail Send" permissions enabled.',
+        '3. If your API key contains special characters, ensure it was copied cleanly without spaces, quotes, or trailing newlines.',
+        '4. In SendGrid Console (app.sendgrid.com) > Settings > API Keys, generate a fresh API key and paste it into your Firebase Extension configuration or app secrets.',
+        '5. If using Gmail SMTP instead, ensure you are using a 16-character Google App Password (not your normal Google account password).'
+      ] : [
         '1. Open Google Account Security: https://myaccount.google.com/security',
         '2. Ensure 2-Step Verification is turned ON for your account.',
         '3. Go to App Passwords: https://myaccount.google.com/apppasswords',
@@ -194,11 +207,15 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
       setServerConfig(cfg);
       if (notify) {
         if (cfg.configured) {
-          toast.success(`SendGrid connected! (${cfg.maskedKey || 'Key Active'})`);
+          if (cfg.provider === 'google_workspace' || cfg.hasGoogleWorkspace) {
+            toast.success(`Google Workspace SMTP connected! (${cfg.googleConfig?.user || 'quinnledak@vastasports.com'})`);
+          } else {
+            toast.success(`SendGrid connected! (${cfg.maskedKey || 'Key Active'})`);
+          }
         } else if (cfg.error) {
           toast.error(`Backend check failed: ${cfg.error}`);
         } else {
-          toast.warning('SENDGRID_API_KEY was not detected on the server.');
+          toast.warning('No direct backend email keys detected; queueing will use Google Workspace via Firestore.');
         }
       }
     } catch (e: any) {
@@ -521,7 +538,7 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
             </div>
           </div>
 
-          {/* SendGrid Direct Pipeline Status Banner */}
+          {/* Direct Pipeline Status Banner */}
           {serverConfig?.configured ? (
             <div className="px-6 py-3 bg-emerald-50/90 border-b border-emerald-200 flex flex-wrap items-center justify-between gap-3 text-xs text-emerald-950">
               <div className="flex items-center gap-2.5">
@@ -530,11 +547,21 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="font-bold text-emerald-950">SendGrid Direct Pipeline Connected</p>
-                    {serverConfig.maskedKey && (
+                    <p className="font-bold text-emerald-950">
+                      {serverConfig.provider === 'google_workspace' || serverConfig.hasGoogleWorkspace 
+                        ? 'Google Workspace SMTP Connected' 
+                        : 'SendGrid Direct Pipeline Connected'}
+                    </p>
+                    {serverConfig.provider === 'google_workspace' || serverConfig.hasGoogleWorkspace ? (
                       <span className="font-mono text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded border border-emerald-200">
-                        {serverConfig.maskedKey}
+                        {serverConfig.googleConfig?.user || 'quinnledak@vastasports.com'}
                       </span>
+                    ) : (
+                      serverConfig.maskedKey && (
+                        <span className="font-mono text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded border border-emerald-200">
+                          {serverConfig.maskedKey}
+                        </span>
+                      )
                     )}
                     {serverConfig.source && (
                       <span className="text-[10px] text-emerald-700 bg-white/80 px-1.5 py-0.5 rounded border border-emerald-200">
@@ -543,7 +570,9 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                     )}
                   </div>
                   <p className="text-emerald-800 text-[11px] mt-0.5">
-                    Notifications are dispatched immediately via SendGrid REST API. Bypasses Google Cloud billing locks and Gmail SMTP rate limits.
+                    {serverConfig.provider === 'google_workspace' || serverConfig.hasGoogleWorkspace
+                      ? 'Notifications are dispatched directly through your Google Workspace / Gmail SMTP relay.'
+                      : 'Notifications are dispatched immediately via SendGrid REST API.'}
                   </p>
                 </div>
               </div>
@@ -567,7 +596,7 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                     className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md font-semibold text-xs transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
                   >
                     <RotateCcw className={`w-3 h-3 ${retryingAll ? 'animate-spin' : ''}`} />
-                    <span>Re-Send {failedLogs.length} Failed via SendGrid</span>
+                    <span>Re-Send {failedLogs.length} Failed</span>
                   </button>
                 )}
               </div>
@@ -581,13 +610,13 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="font-bold text-blue-950">Firebase Hosting Live Site (Firestore Queue Mode)</p>
+                      <p className="font-bold text-blue-950">Firebase Hosting Live Site (Google Workspace Queue Mode)</p>
                       <span className="text-[10px] uppercase font-semibold tracking-wide px-1.5 py-0.5 rounded bg-blue-200/80 text-blue-900">
                         Static CDN
                       </span>
                     </div>
                     <p className="text-blue-800 text-[11px] mt-0.5">
-                      Your live site is hosted as a static application on Firebase Hosting. Outgoing email documents are recorded directly to Firestore's <code className="font-mono bg-blue-100/80 px-1 py-0.5 rounded">mail</code> collection for delivery.
+                      Your live site is hosted on Firebase Hosting. Outgoing emails are queued directly in Firestore's <code className="font-mono bg-blue-100/80 px-1 py-0.5 rounded">mail</code> collection and delivered by your Trigger Email extension (Option 1).
                     </p>
                   </div>
                 </div>
@@ -621,8 +650,8 @@ export const EmailDiagnosticsModal: React.FC<EmailDiagnosticsModalProps> = ({
                   </p>
                   <ol className="list-decimal pl-4 space-y-1 text-[11px] text-slate-600">
                     <li>The app writes a document directly to the <code className="font-mono bg-slate-100 px-1 rounded">mail</code> collection in Firestore (both primary and default databases).</li>
-                    <li>If you have the <strong>Firebase "Trigger Email" Extension</strong> installed in your Firebase Console, it automatically picks up the Firestore document and dispatches it via SendGrid or SMTP.</li>
-                    <li>In the development preview or Cloud Run container, the Express server handles direct SendGrid API calls immediately.</li>
+                    <li>Your <strong>Firebase "Trigger Email" Extension</strong> (configured with Option 1 - Google Workspace SMTP) automatically detects the document and delivers it through <code className="font-mono bg-slate-100 px-1 rounded">quinnledak@vastasports.com</code>.</li>
+                    <li>The extension updates the document in Firestore with delivery state <code className="font-mono bg-slate-100 px-1 rounded">SUCCESS</code>, visible in the real-time logs table below.</li>
                   </ol>
                 </div>
               )}

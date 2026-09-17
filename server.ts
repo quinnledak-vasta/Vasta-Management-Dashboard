@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import sgMail from "@sendgrid/mail";
+import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -13,6 +14,14 @@ interface SendGridKeyResolution {
   detectedKeys: string[];
   quotesStripped: boolean;
   formatValid: boolean;
+}
+
+interface GoogleSmtpResolution {
+  configured: boolean;
+  user: string;
+  pass: string;
+  source: string;
+  masked: string | null;
 }
 
 function sanitizeApiKey(raw: string | undefined | null): { key: string; quotesStripped: boolean } {
@@ -29,6 +38,44 @@ function sanitizeApiKey(raw: string | undefined | null): { key: string; quotesSt
     val = val.slice(7).trim();
   }
   return { key: val, quotesStripped };
+}
+
+// Helper to resolve Google Workspace / Gmail SMTP credentials
+function resolveGoogleSmtpConfig(): GoogleSmtpResolution {
+  const user = process.env.SMTP_USER || process.env.GMAIL_USER || process.env.GOOGLE_EMAIL || 'quinnledak@vastasports.com';
+  
+  const possiblePassVars = [
+    'GMAIL_APP_PASSWORD',
+    'GOOGLE_APP_PASSWORD',
+    'GMAIL_PASSWORD',
+    'SMTP_PASS',
+    'SMTP_PASSWORD',
+    'EMAIL_PASSWORD'
+  ];
+
+  for (const varName of possiblePassVars) {
+    const raw = process.env[varName];
+    if (raw && typeof raw === 'string') {
+      const clean = raw.replace(/\s+/g, '').replace(/["']/g, '');
+      if (clean.length >= 12) {
+        return {
+          configured: true,
+          user,
+          pass: clean,
+          source: varName,
+          masked: `${clean.slice(0, 3)}...${clean.slice(-3)}`
+        };
+      }
+    }
+  }
+
+  return {
+    configured: false,
+    user,
+    pass: '',
+    source: 'none',
+    masked: null
+  };
 }
 
 // Helper to resolve SendGrid API key flexibly regardless of casing, quoting, or exact variable naming
@@ -135,35 +182,49 @@ async function startServer() {
     });
   });
 
-  // Email status endpoint - checks if SendGrid is configured
+  // Email status endpoint - checks if Google Workspace or SendGrid is configured
   app.get("/api/email-config", (_req, res) => {
-    const resolution = resolveSendGridApiKey();
-    const hasApiKey = Boolean(resolution.key && resolution.key.length > 10);
+    const sgResolution = resolveSendGridApiKey();
+    const googleResolution = resolveGoogleSmtpConfig();
+    const hasSg = Boolean(sgResolution.key && sgResolution.key.length > 10);
+    const hasGoogle = googleResolution.configured;
     const defaultFrom = process.env.SENDGRID_FROM_EMAIL || "quinnledak@vastasports.com";
 
+    const activeProvider = hasGoogle ? "google_workspace" : (hasSg ? "sendgrid" : "firestore_extension");
+
     res.json({
-      configured: hasApiKey,
-      provider: "sendgrid",
+      configured: hasSg || hasGoogle,
+      provider: activeProvider,
+      hasGoogleWorkspace: hasGoogle,
+      hasSendGrid: hasSg,
+      googleConfig: {
+        configured: hasGoogle,
+        user: googleResolution.user,
+        masked: googleResolution.masked,
+        source: googleResolution.source
+      },
       defaultFrom,
-      maskedKey: resolution.masked,
-      source: resolution.source,
-      detectedKeys: resolution.detectedKeys,
-      formatValid: resolution.formatValid,
-      quotesStripped: resolution.quotesStripped,
+      maskedKey: hasGoogle ? googleResolution.masked : sgResolution.masked,
+      source: hasGoogle ? googleResolution.source : sgResolution.source,
+      detectedKeys: sgResolution.detectedKeys,
+      formatValid: hasGoogle ? true : sgResolution.formatValid,
+      quotesStripped: sgResolution.quotesStripped,
       env: process.env.NODE_ENV || 'development',
       serverTime: new Date().toISOString()
     });
   });
 
-  // Send email directly through SendGrid
+  // Send email directly through Google Workspace SMTP or SendGrid
   app.post("/api/send-email", async (req, res) => {
-    const resolution = resolveSendGridApiKey();
+    const sgResolution = resolveSendGridApiKey();
+    const googleResolution = resolveGoogleSmtpConfig();
 
-    if (!resolution.key) {
+    if (!googleResolution.configured && !sgResolution.key) {
       return res.status(503).json({
         success: false,
-        error: "SENDGRID_API_KEY environment variable is not configured. Please add SENDGRID_API_KEY to your project Settings > Secrets.",
-        detectedKeys: resolution.detectedKeys
+        error: "Direct backend mail transport not configured in server environment. Queuing in Firestore for Google Workspace / Firebase Extension processing.",
+        provider: 'firestore_extension',
+        detectedKeys: sgResolution.detectedKeys
       });
     }
 
@@ -176,8 +237,58 @@ async function startServer() {
       });
     }
 
+    // 1. Google Workspace SMTP (via Nodemailer)
+    if (googleResolution.configured) {
+      try {
+        const transporter = nodemailer.createTransport({
+          host: "smtp.gmail.com",
+          port: 465,
+          secure: true,
+          auth: {
+            user: googleResolution.user,
+            pass: googleResolution.pass
+          }
+        });
+
+        const defaultFrom = `Vasta Performance Training <${googleResolution.user}>`;
+        const effectiveFrom = from || defaultFrom;
+
+        const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean);
+        if (recipients.length === 0) {
+          return res.status(400).json({ success: false, error: "No valid recipient email provided." });
+        }
+
+        const info = await transporter.sendMail({
+          from: effectiveFrom,
+          to: recipients.length === 1 ? recipients[0] : recipients,
+          replyTo: replyTo || googleResolution.user,
+          subject,
+          text: text || (html ? html.replace(/<[^>]*>?/gm, '') : ''),
+          html: html || `<p>${text}</p>`
+        });
+
+        return res.json({
+          success: true,
+          provider: 'google_workspace',
+          messageId: info.messageId,
+          timestamp: new Date().toISOString()
+        });
+      } catch (gmailErr: any) {
+        console.error("Google Workspace SMTP Error:", gmailErr);
+        // If SendGrid is also available as fallback, proceed to SendGrid; otherwise fail
+        if (!sgResolution.key) {
+          return res.status(502).json({
+            success: false,
+            provider: 'google_workspace',
+            error: gmailErr?.message || "Google Workspace SMTP rejected delivery"
+          });
+        }
+      }
+    }
+
+    // 2. SendGrid Fallback
     try {
-      sgMail.setApiKey(resolution.key);
+      sgMail.setApiKey(sgResolution.key);
 
       // Parse sender into clean { email, name } object accepted by SendGrid
       const defaultFrom = process.env.SENDGRID_FROM_EMAIL || "quinnledak@vastasports.com";
@@ -246,6 +357,7 @@ async function startServer() {
 
       return res.json({
         success: true,
+        provider: 'sendgrid',
         statusCode: sendgridResponse?.statusCode || 202,
         messageId: sendgridResponse?.headers?.['x-message-id'] || `sg-${Date.now()}`
       });
