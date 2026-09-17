@@ -286,18 +286,21 @@ export async function dispatchEmailNotification(payload: EmailPayload): Promise<
           }
         };
       } else {
-        directError = data.error || `HTTP ${res.status}: Failed to send via SendGrid`;
-        mailDocData.delivery = {
-          state: 'ERROR',
-          attempts: 1,
-          error: directError,
-          endTime: new Date().toISOString()
-        };
+        directError = data.error || `HTTP ${res.status}: Direct API call unsuccessful`;
+        console.warn('Direct SendGrid call unsuccessful; delegating delivery to Firestore Trigger Email Extension queue:', directError);
+        // Do NOT set mailDocData.delivery.state = 'ERROR' here.
+        // The Firebase Trigger Email extension automatically skips documents that already contain state: 'ERROR'.
+        // Leaving delivery unset allows the extension to detect the new document, transition to PROCESSING, and dispatch.
+        if (mailDocData.metadata) {
+          mailDocData.metadata.directAttemptError = directError;
+        } else {
+          mailDocData.metadata = { directAttemptError: directError };
+        }
       }
     }
   } catch (netErr: any) {
-    console.warn('Direct SendGrid call bypassed/network error, writing to Firestore queue:', netErr);
-    // Bypassed or server offline: leave delivery undefined so Firebase Extension can process if running
+    console.warn('Direct SendGrid call bypassed/network error, writing to Firestore queue for extension processing:', netErr);
+    // Bypassed or server offline: leave delivery undefined so Firebase Extension processes the queue
   }
 
   let primaryDocId: string | undefined;
