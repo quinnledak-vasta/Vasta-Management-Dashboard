@@ -181,7 +181,13 @@
         "textBody": { "type": "string" },
         "duration": { "type": "number" },
         "order": { "type": "number" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string", "format": "date-time" },
+        "attachments": { "type": "array" },
+        "hasHomework": { "type": "boolean" },
+        "homeworkTitle": { "type": "string" },
+        "homeworkFileUrl": { "type": "string" },
+        "homeworkFileName": { "type": "string" },
+        "homeworkFileType": { "type": "string" }
       },
       "required": ["courseId", "chapterId", "title", "order", "createdAt"]
     },

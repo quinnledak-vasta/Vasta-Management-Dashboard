@@ -241,6 +241,16 @@ export interface Chapter {
   createdAt: string;
 }
 
+export interface LessonAttachment {
+  id: string;
+  name: string;
+  url: string; // Cloud storage key ('firestorefile_...'), base64 dataUrl, or external link
+  type: 'file' | 'link';
+  fileType?: string; // MIME type or extension
+  size?: number; // Size in bytes if uploaded
+  createdAt?: string;
+}
+
 export interface Lesson {
   id: string;
   courseId: string;
@@ -252,6 +262,7 @@ export interface Lesson {
   duration?: number; // In minutes
   order: number;
   createdAt: string;
+  attachments?: LessonAttachment[];
   hasHomework?: boolean;
   homeworkTitle?: string;
   homeworkFileUrl?: string; // Base64 dataUrl or web URL

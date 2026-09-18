@@ -56,7 +56,8 @@ import {
   FileImage,
   Download,
   Eye,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Paperclip
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, getDay, isWithinInterval, parseISO } from 'date-fns';
@@ -158,8 +159,10 @@ import {
   Course,
   Chapter,
   Lesson,
+  LessonAttachment,
   UserLessonProgress
 } from './types';
+import { LessonAttachmentManager, LessonAttachmentViewer } from './components/LessonAttachments';
 import { GoogleGenAI } from "@google/genai";
 
 // Initialize Gemini for drafting alerts
@@ -353,6 +356,7 @@ function AppContent() {
     textBody: string;
     duration: number;
     order: number;
+    attachments?: LessonAttachment[];
     hasHomework?: boolean;
     homeworkTitle?: string;
     homeworkFileUrl?: string;
@@ -367,6 +371,7 @@ function AppContent() {
     textBody: '',
     duration: 5,
     order: 1,
+    attachments: [],
     hasHomework: false,
     homeworkTitle: '',
     homeworkFileUrl: '',
@@ -3108,6 +3113,7 @@ function AppContent() {
       duration: Number(newLesson.duration) || 5,
       order: Number(newLesson.order) || (lessons.filter(l => l.chapterId === chapterId).length + 1),
       createdAt: new Date().toISOString(),
+      attachments: newLesson.attachments || [],
       hasHomework: !!newLesson.hasHomework,
       homeworkTitle: newLesson.homeworkTitle || '',
       homeworkFileUrl: newLesson.homeworkFileUrl || '',
@@ -3127,6 +3133,7 @@ function AppContent() {
       textBody: '',
       duration: 5,
       order: 1,
+      attachments: [],
       hasHomework: false,
       homeworkTitle: '',
       homeworkFileUrl: '',
@@ -3271,6 +3278,7 @@ function AppContent() {
       order: Number(newLesson.order) || 1,
       ...(newLesson.chapterId ? { chapterId: newLesson.chapterId } : {}),
       ...(targetCourseId ? { courseId: targetCourseId } : {}),
+      attachments: newLesson.attachments || [],
       hasHomework: !!newLesson.hasHomework,
       homeworkTitle: newLesson.homeworkTitle || '',
       homeworkFileUrl: newLesson.homeworkFileUrl || '',
@@ -3290,6 +3298,7 @@ function AppContent() {
       textBody: '',
       duration: 5,
       order: 1,
+      attachments: [],
       hasHomework: false,
       homeworkTitle: '',
       homeworkFileUrl: '',
@@ -7770,6 +7779,11 @@ function AppContent() {
                                                 <FileText className="w-2.5 h-2.5" /> Guide
                                               </span>
                                             )}
+                                            {lesson.attachments && lesson.attachments.length > 0 && (
+                                              <span className="flex items-center gap-0.5 text-purple-600 font-semibold" title={`${lesson.attachments.length} attachment(s)`}>
+                                                <Paperclip className="w-2.5 h-2.5" /> {lesson.attachments.length}
+                                              </span>
+                                            )}
                                           </div>
                                         </div>
                                       </div>
@@ -7793,6 +7807,7 @@ function AppContent() {
                                                 textBody: lesson.textBody || '',
                                                 duration: lesson.duration || 5,
                                                 order: lesson.order || 1,
+                                                attachments: lesson.attachments || [],
                                                 hasHomework: !!lesson.hasHomework,
                                                 homeworkTitle: lesson.homeworkTitle || '',
                                                 homeworkFileUrl: lesson.homeworkFileUrl || '',
@@ -7992,6 +8007,7 @@ function AppContent() {
                                       textBody: activeLesson.textBody || '',
                                       duration: activeLesson.duration || 5,
                                       order: activeLesson.order || 1,
+                                      attachments: activeLesson.attachments || [],
                                       hasHomework: !!activeLesson.hasHomework,
                                       homeworkTitle: activeLesson.homeworkTitle || '',
                                       homeworkFileUrl: activeLesson.homeworkFileUrl || '',
@@ -8029,6 +8045,12 @@ function AppContent() {
                             {activeLesson.textBody || "No instructions provided for this lesson yet."}
                           </div>
                         </div>
+
+                        {/* Lesson Attachments & Resources */}
+                        <LessonAttachmentViewer 
+                          attachments={activeLesson.attachments} 
+                          lessonTitle={activeLesson.title} 
+                        />
 
                         {/* Student Homework Card */}
                         {activeLesson.hasHomework && (() => {
@@ -8485,6 +8507,7 @@ function AppContent() {
                           textBody: '',
                           duration: 5,
                           order: 1,
+                          attachments: [],
                           hasHomework: false,
                           homeworkTitle: '',
                           homeworkFileUrl: '',
@@ -8494,7 +8517,7 @@ function AppContent() {
                       }
                       setIsNewLessonOpen(open);
                     }}>
-                      <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
+                      <DialogContent className="sm:max-w-[580px] max-h-[90vh] overflow-y-auto">
                         <DialogHeader>
                           <DialogTitle>{editingLessonId ? 'Edit Training Lesson' : 'Add Training Lesson'}</DialogTitle>
                           <DialogDescription>Upload instruction videos, set descriptions, and write accompanying checklists.</DialogDescription>
@@ -8700,6 +8723,14 @@ function AppContent() {
                               </div>
                             )}
                           </div>
+
+                          {/* Multiple Lesson Attachments & Resources */}
+                          <LessonAttachmentManager
+                            attachments={newLesson.attachments || []}
+                            onChange={(updatedAttachments) => {
+                              setNewLesson({ ...newLesson, attachments: updatedAttachments });
+                            }}
+                          />
 
                           {/* Homework Settings */}
                           <div className="grid gap-3 border border-slate-100 rounded-xl p-4 bg-slate-50/50">

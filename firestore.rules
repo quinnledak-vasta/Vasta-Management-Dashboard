@@ -182,6 +182,12 @@ service cloud.firestore {
              (data.get('videoUrl', null) == null || data.get('videoUrl', null) is string) &&
              (data.get('textBody', null) == null || data.get('textBody', null) is string) &&
              (data.get('duration', null) == null || data.get('duration', null) is number) &&
+             (data.get('attachments', null) == null || data.get('attachments', null) is list) &&
+             (data.get('hasHomework', null) == null || data.get('hasHomework', null) is bool) &&
+             (data.get('homeworkTitle', null) == null || data.get('homeworkTitle', null) is string) &&
+             (data.get('homeworkFileUrl', null) == null || data.get('homeworkFileUrl', null) is string) &&
+             (data.get('homeworkFileName', null) == null || data.get('homeworkFileName', null) is string) &&
+             (data.get('homeworkFileType', null) == null || data.get('homeworkFileType', null) is string) &&
              data.order is number &&
              data.createdAt is string;
     }
