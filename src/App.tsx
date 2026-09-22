@@ -163,6 +163,7 @@ import {
   UserLessonProgress
 } from './types';
 import { LessonAttachmentManager, LessonAttachmentViewer } from './components/LessonAttachments';
+import { RobustVideoPlayer } from './components/RobustVideoPlayer';
 import { GoogleGenAI } from "@google/genai";
 
 // Initialize Gemini for drafting alerts
@@ -7987,23 +7988,16 @@ function AppContent() {
                                     );
                                   }
                                   return (
-                                    <div className="w-full h-full relative group bg-black flex items-center justify-center">
-                                      <video 
+                                    <div className="absolute inset-0 w-full h-full">
+                                      <RobustVideoPlayer 
                                         key={resolvedLocalUrl}
                                         src={resolvedLocalUrl} 
-                                        controls 
-                                        autoPlay
-                                        playsInline
-                                        className="w-full h-full object-contain bg-black" 
+                                        title={currentMediaToPlay?.title || activeLesson.title}
+                                        mimeType={resolvedLocalType || 'video/mp4'}
+                                        downloadFileName={`${currentMediaToPlay?.title || activeLesson.title}.mp4`}
+                                        autoPlay={true}
+                                        badge={currentMediaToPlay?.isAttachment ? currentMediaToPlay.title : undefined}
                                       />
-                                      {currentMediaToPlay?.isAttachment && (
-                                        <div className="absolute top-3 left-3 pointer-events-none">
-                                          <span className="px-2.5 py-1 bg-slate-900/85 backdrop-blur-xs text-white text-[11px] font-bold rounded-md shadow-md border border-slate-700/50 flex items-center gap-1.5">
-                                            <Video className="w-3 h-3 text-red-400" />
-                                            {currentMediaToPlay.title}
-                                          </span>
-                                        </div>
-                                      )}
                                     </div>
                                   );
                                 })()
@@ -8052,24 +8046,15 @@ function AppContent() {
                               }
                               if (mediaType === 'video') {
                                 return (
-                                  <div className="w-full h-full relative group bg-black flex items-center justify-center">
-                                    <video 
+                                  <div className="absolute inset-0 w-full h-full">
+                                    <RobustVideoPlayer 
                                       key={activePlayingUrl}
                                       src={activePlayingUrl} 
-                                      controls 
-                                      autoPlay
-                                      playsInline
-                                      className="w-full h-full object-contain bg-black" 
-                                      referrerPolicy="no-referrer"
+                                      title={currentMediaToPlay?.title || activeLesson.title}
+                                      downloadFileName={`${currentMediaToPlay?.title || activeLesson.title}.mp4`}
+                                      autoPlay={true}
+                                      badge={currentMediaToPlay?.isAttachment ? currentMediaToPlay.title : undefined}
                                     />
-                                    {currentMediaToPlay?.isAttachment && (
-                                      <div className="absolute top-3 left-3 pointer-events-none">
-                                        <span className="px-2.5 py-1 bg-slate-900/85 backdrop-blur-xs text-white text-[11px] font-bold rounded-md shadow-md border border-slate-700/50 flex items-center gap-1.5">
-                                          <Video className="w-3 h-3 text-red-400" />
-                                          {currentMediaToPlay.title}
-                                        </span>
-                                      </div>
-                                    )}
                                   </div>
                                 );
                               }

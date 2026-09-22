@@ -28,8 +28,32 @@ function fileToDataUrl(file: File | Blob): Promise<string> {
   });
 }
 
+export function normalizeVideoMimeType(type?: string | null, fileName?: string | null): string {
+  const ext = (fileName || '').toLowerCase().split('?')[0].split('#')[0];
+  const t = (type || '').toLowerCase();
+
+  if (t.startsWith('image/')) return t;
+  if (t === 'application/pdf' || ext.endsWith('.pdf')) return 'application/pdf';
+  if (t === 'video/webm' || ext.endsWith('.webm')) return 'video/webm';
+  if (t === 'video/ogg' || ext.endsWith('.ogg') || ext.endsWith('.ogv')) return 'video/ogg';
+  
+  // QuickTime .mov, mp4, m4v, 3gp, octet-stream, or unknown video
+  // video/mp4 is the universal container format that Chrome/Firefox/Safari use to activate H.264 video decoding
+  return 'video/mp4';
+}
+
+function ensurePlayableBlob(blob: Blob | File | null, fileName?: string): Blob | null {
+  if (!blob) return null;
+  const targetMime = normalizeVideoMimeType(blob.type, fileName);
+  if (blob.type === targetMime) {
+    return blob;
+  }
+  // Wrap with normalized MIME type (e.g. converting video/quicktime to video/mp4 so Chrome decodes video frames)
+  return new Blob([blob], { type: targetMime });
+}
+
 export async function dataUrlToBlobAsync(dataUrl: string, fallbackMime = 'video/mp4'): Promise<Blob> {
-  if (!dataUrl) return new Blob([], { type: fallbackMime });
+  if (!dataUrl) return new Blob([], { type: normalizeVideoMimeType(fallbackMime) });
 
   // 1. Native browser fetch on Data URLs is fast, memory-safe, and avoids atob callstack limitations
   if (typeof fetch === 'function' && dataUrl.startsWith('data:')) {
@@ -37,7 +61,7 @@ export async function dataUrlToBlobAsync(dataUrl: string, fallbackMime = 'video/
       const res = await fetch(dataUrl);
       const blob = await res.blob();
       if (blob && blob.size > 0) {
-        return blob;
+        return ensurePlayableBlob(blob) || blob;
       }
     } catch {
       // Fall through to manual chunked decode
@@ -56,9 +80,10 @@ export async function dataUrlToBlobAsync(dataUrl: string, fallbackMime = 'video/
       base64Data = parts[1] || '';
     }
 
+    const normalizedMime = normalizeVideoMimeType(mime);
     const cleanB64 = base64Data.replace(/[\r\n\s]/g, '');
     if (!cleanB64) {
-      return new Blob([], { type: mime });
+      return new Blob([], { type: normalizedMime });
     }
 
     const binaryString = atob(cleanB64);
@@ -67,10 +92,10 @@ export async function dataUrlToBlobAsync(dataUrl: string, fallbackMime = 'video/
     for (let i = 0; i < len; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
-    return new Blob([bytes], { type: mime });
+    return new Blob([bytes], { type: normalizedMime });
   } catch (err) {
     console.error('Error converting data URL to Blob:', err);
-    return new Blob([], { type: fallbackMime });
+    return new Blob([], { type: normalizeVideoMimeType(fallbackMime) });
   }
 }
 
@@ -107,13 +132,16 @@ export async function saveLocalVideo(file: File): Promise<string> {
   const fileId = `file_${timestamp}_${randomStr}_${cleanName}`;
   const key = `firestorefile_${fileId}`;
 
+  // Normalize MIME type so videos (e.g. iPhone .mov/QuickTime or unspecified MP4) decode video frames cleanly
+  const normalizedMime = normalizeVideoMimeType(file.type, file.name);
+
   // Create a clean, cloneable Blob to avoid DOM File handle serialization issues
   let blob: Blob;
   try {
     const arrayBuffer = await file.arrayBuffer();
-    blob = new Blob([arrayBuffer], { type: file.type || 'video/mp4' });
+    blob = new Blob([arrayBuffer], { type: normalizedMime });
   } catch {
-    blob = new Blob([file], { type: file.type || 'video/mp4' });
+    blob = new Blob([file], { type: normalizedMime });
   }
 
   // Save to IndexedDB locally for instant availability under multiple keys
@@ -275,7 +303,7 @@ export async function getLocalVideoBlob(id: string, fallbackName?: string): Prom
       if (localBlob && localBlob.size > 0) {
         // Trigger background sync to Firestore if not synced
         syncLocalBlobToFirestore(keyCandidate, localBlob, fallbackName);
-        return localBlob;
+        return ensurePlayableBlob(localBlob, fallbackName);
       }
     }
 
@@ -317,7 +345,7 @@ export async function getLocalVideoBlob(id: string, fallbackName?: string): Prom
           writeTx.objectStore(STORE_NAME).put(matchedBlob, id);
         } catch {}
 
-        return matchedBlob;
+        return ensurePlayableBlob(matchedBlob, fallbackName);
       }
     }
   } catch (err) {
@@ -402,7 +430,7 @@ export async function getLocalVideoBlob(id: string, fallbackName?: string): Prom
             }
           } catch {}
 
-          return downloadedBlob;
+          return ensurePlayableBlob(downloadedBlob, fallbackName || docData.fileName);
         }
       }
 
@@ -415,7 +443,7 @@ export async function getLocalVideoBlob(id: string, fallbackName?: string): Prom
             const transaction = dbInst.transaction(STORE_NAME, 'readwrite');
             transaction.objectStore(STORE_NAME).put(downloadedBlob, id);
           } catch {}
-          return downloadedBlob;
+          return ensurePlayableBlob(downloadedBlob, fallbackName || docData.fileName);
         }
       }
     }

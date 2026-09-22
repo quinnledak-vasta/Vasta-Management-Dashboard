@@ -25,7 +25,8 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { LessonAttachment } from '../types';
-import { saveLocalVideo, getLocalVideoBlob } from '../lib/videoCache';
+import { saveLocalVideo, getLocalVideoBlob, dataUrlToBlobAsync } from '../lib/videoCache';
+import { RobustVideoPlayer } from './RobustVideoPlayer';
 import { toast } from 'sonner';
 
 export function getAttachmentIcon(attachment: LessonAttachment | { name: string; url?: string; fileType?: string }) {
@@ -438,7 +439,22 @@ export function LessonAttachmentViewer({ attachments, lessonTitle, onPlayVideoIn
       return;
     }
 
-    if (att.url.startsWith('data:') || att.url.startsWith('http')) {
+    if (att.url.startsWith('data:')) {
+      try {
+        const blob = await dataUrlToBlobAsync(att.url, att.fileType || 'video/mp4');
+        if (blob && blob.size > 0) {
+          const objectUrl = URL.createObjectURL(blob);
+          setPreviewAttachment({ name: att.name, url: objectUrl, type: blob.type || att.fileType || 'video/mp4' });
+          return;
+        }
+      } catch (err) {
+        console.warn('Error converting data URL to blob:', err);
+      }
+      setPreviewAttachment({ name: att.name, url: att.url, type: att.fileType || '' });
+      return;
+    }
+
+    if (att.url.startsWith('http')) {
       setPreviewAttachment({ name: att.name, url: att.url, type: att.fileType || '' });
       return;
     }
@@ -641,13 +657,14 @@ export function LessonAttachmentViewer({ attachments, lessonTitle, onPlayVideoIn
 
             <div className="flex-1 overflow-auto min-h-[420px] flex items-center justify-center bg-slate-950 rounded-xl p-2 shadow-inner">
               {isVideoAttachment({ name: previewAttachment.name, fileType: previewAttachment.type, url: previewAttachment.url }) ? (
-                <div className="w-full flex flex-col items-center justify-center">
-                  <video
+                <div className="w-full h-[65vh] min-h-[400px] flex flex-col items-center justify-center relative rounded-xl overflow-hidden bg-black">
+                  <RobustVideoPlayer
                     src={previewAttachment.url}
-                    controls
-                    autoPlay
-                    playsInline
-                    className="max-h-[68vh] w-full object-contain rounded-lg shadow-lg bg-black"
+                    title={previewAttachment.name}
+                    mimeType={previewAttachment.type || 'video/mp4'}
+                    downloadFileName={previewAttachment.name}
+                    autoPlay={true}
+                    badge="Attachment Video"
                   />
                 </div>
               ) : previewAttachment.type.includes('pdf') || previewAttachment.name.toLowerCase().endsWith('.pdf') ? (
