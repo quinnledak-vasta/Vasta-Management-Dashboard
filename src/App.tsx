@@ -311,6 +311,7 @@ function AppContent() {
   const [resolvedLocalUrl, setResolvedLocalUrl] = useState<string | null>(null);
   const [resolvedLocalType, setResolvedLocalType] = useState<string | null>(null);
   const [isResolvingLocalVideo, setIsResolvingLocalVideo] = useState(false);
+  const [activeCustomMedia, setActiveCustomMedia] = useState<{ id: string; title: string; url: string; fileType?: string } | null>(null);
   const [videoSourceType, setVideoSourceType] = useState<'link' | 'file'>('link');
   const [isUploadingLocalFile, setIsUploadingLocalFile] = useState(false);
   const [uploadDragActive, setUploadDragActive] = useState(false);
@@ -1949,20 +1950,33 @@ function AppContent() {
     }
   }, [activeCourseId, activeLessonId, chapters, lessons]);
 
-  // Resolve local desktop video if the active lesson has a localfile url
-  const activeLessonVideoUrl = lessons.find(l => l.id === activeLessonId)?.videoUrl;
+  // Reset custom media when active lesson changes
+  useEffect(() => {
+    setActiveCustomMedia(null);
+  }, [activeLessonId]);
+
+  // Resolve local desktop video if the active lesson or selected attachment has a localfile/firestore url
+  const activeLessonObj = lessons.find(l => l.id === activeLessonId);
+  const activeLessonVideoUrl = activeLessonObj?.videoUrl;
+  const effectiveMediaUrl = activeCustomMedia?.url || activeLessonVideoUrl;
+  const effectiveMediaTitle = activeCustomMedia?.title || activeLessonObj?.title;
 
   useEffect(() => {
     let active = true;
     let urlToRevoke: string | null = null;
 
     const resolveVideo = async () => {
-      if (activeLessonVideoUrl && (activeLessonVideoUrl.startsWith('localfile_') || activeLessonVideoUrl.startsWith('firestorefile_'))) {
+      if (effectiveMediaUrl && (
+        effectiveMediaUrl.startsWith('localfile_') || 
+        effectiveMediaUrl.startsWith('firestorefile_') || 
+        effectiveMediaUrl.startsWith('data:') || 
+        effectiveMediaUrl.startsWith('blob:')
+      )) {
         setIsResolvingLocalVideo(true);
         setResolvedLocalUrl(null);
         setResolvedLocalType(null);
         try {
-          const blob = await getLocalVideoBlob(activeLessonVideoUrl);
+          const blob = await getLocalVideoBlob(effectiveMediaUrl, effectiveMediaTitle);
           if (blob && active) {
             const objectUrl = URL.createObjectURL(blob);
             urlToRevoke = objectUrl;
@@ -1991,7 +2005,7 @@ function AppContent() {
         URL.revokeObjectURL(urlToRevoke);
       }
     };
-  }, [activeLessonId, activeLessonVideoUrl]);
+  }, [activeLessonId, effectiveMediaUrl, effectiveMediaTitle]);
 
   // Reset student homework submission input states when active lesson changes
   useEffect(() => {
@@ -7856,25 +7870,102 @@ function AppContent() {
 
                   {/* Right Panel: Immersive Video Player & Study Guide */}
                   <div className="lg:col-span-8 space-y-6">
-                    {activeLesson ? (
+                    {activeLesson ? (() => {
+                      const attachedVideos = (activeLesson.attachments || []).filter(att => {
+                        if (att.type === 'link') return false;
+                        const ft = (att.fileType || '').toLowerCase();
+                        const name = (att.name || '').toLowerCase();
+                        const url = (att.url || '').toLowerCase();
+                        return (
+                          ft.startsWith('video/') ||
+                          /\.(mp4|mov|webm|ogg|m4v|mkv|avi|flv|wmv)$/i.test(name) ||
+                          url.startsWith('data:video/') ||
+                          /\.(mp4|mov|webm|ogg|m4v|mkv|avi|flv|wmv)$/i.test(url) ||
+                          url.includes('video')
+                        );
+                      });
+
+                      const allLessonVideos: { id: string; title: string; url: string; fileType?: string; isAttachment?: boolean }[] = [];
+                      if (activeLesson.videoUrl) {
+                        allLessonVideos.push({
+                          id: 'primary',
+                          title: 'Main Lesson Video',
+                          url: activeLesson.videoUrl,
+                          isAttachment: false
+                        });
+                      }
+                      attachedVideos.forEach((att, idx) => {
+                        allLessonVideos.push({
+                          id: att.id,
+                          title: att.name || `Attached Video ${idx + 1}`,
+                          url: att.url,
+                          fileType: att.fileType,
+                          isAttachment: true
+                        });
+                      });
+
+                      const currentMediaToPlay = activeCustomMedia || (activeLesson.videoUrl ? {
+                        id: 'primary',
+                        title: 'Main Lesson Video',
+                        url: activeLesson.videoUrl,
+                        isAttachment: false
+                      } : (allLessonVideos.length > 0 ? allLessonVideos[0] : null));
+
+                      const activePlayingUrl = currentMediaToPlay?.url;
+
+                      return (
                       <Card className="border-slate-200 bg-white shadow-xs overflow-hidden flex flex-col">
+                        {/* Video Switcher Bar (when multiple videos exist in lesson) */}
+                        {allLessonVideos.length > 1 && (
+                          <div className="bg-slate-900 border-b border-slate-800 px-4 py-2.5 flex items-center justify-between gap-2 overflow-x-auto custom-scrollbar">
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="p-1 bg-red-600/20 text-red-400 rounded">
+                                <Video className="w-3.5 h-3.5" />
+                              </div>
+                              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300 font-mono">
+                                Video Tracks ({allLessonVideos.length})
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {allLessonVideos.map((v) => {
+                                const isSelected = activePlayingUrl === v.url;
+                                return (
+                                  <button
+                                    key={v.id}
+                                    type="button"
+                                    onClick={() => setActiveCustomMedia(v)}
+                                    className={`px-3 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
+                                      isSelected
+                                        ? 'bg-red-600 text-white shadow-xs'
+                                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white'
+                                    }`}
+                                  >
+                                    <Play className="w-3 h-3 fill-current" />
+                                    <span className="truncate max-w-[170px]">{v.title}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Video Screen Area */}
-                        {activeLesson.videoUrl ? (
-                          <div className="aspect-video w-full bg-slate-950 relative border-b border-slate-200 overflow-hidden flex items-center justify-center">
-                            {(activeLesson.videoUrl.startsWith('localfile_') || activeLesson.videoUrl.startsWith('firestorefile_')) ? (
+                        {activePlayingUrl ? (
+                          <div id="lesson-video-player-area" className="aspect-video w-full bg-slate-950 relative border-b border-slate-200 overflow-hidden flex items-center justify-center">
+                            {(activePlayingUrl.startsWith('localfile_') || activePlayingUrl.startsWith('firestorefile_') || activePlayingUrl.startsWith('data:') || activePlayingUrl.startsWith('blob:')) ? (
                               isResolvingLocalVideo ? (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 space-y-2">
                                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500"></div>
-                                  <span className="text-xs font-semibold font-mono">Loading shared lesson file...</span>
+                                  <span className="text-xs font-semibold font-mono">Loading video directly from storage...</span>
                                 </div>
                               ) : resolvedLocalUrl ? (
                                 (() => {
-                                  const mediaType = getMediaType(activeLesson.videoUrl, resolvedLocalType);
+                                  const mediaType = getMediaType(activePlayingUrl, resolvedLocalType);
                                   if (mediaType === 'image') {
                                     return (
                                       <div className="w-full h-full p-4 flex flex-col items-center justify-center bg-slate-950 relative">
-                                        <img src={resolvedLocalUrl} alt={activeLesson.title} className="max-h-full max-w-full object-contain rounded shadow-lg" />
-                                        <a href={resolvedLocalUrl} download={`${activeLesson.title}.png`} target="_blank" rel="noopener noreferrer" className="absolute bottom-3 right-3 inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold rounded backdrop-blur-xs transition-all">
+                                        <img src={resolvedLocalUrl} alt={currentMediaToPlay?.title || activeLesson.title} className="max-h-full max-w-full object-contain rounded shadow-lg" />
+                                        <a href={resolvedLocalUrl} download={`${currentMediaToPlay?.title || activeLesson.title}.png`} target="_blank" rel="noopener noreferrer" className="absolute bottom-3 right-3 inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold rounded backdrop-blur-xs transition-all">
                                           <Download className="w-3 h-3" /> Full Image
                                         </a>
                                       </div>
@@ -7887,20 +7978,33 @@ function AppContent() {
                                           <span className="font-semibold flex items-center gap-1.5 text-slate-200">
                                             <FileText className="w-4 h-4 text-red-400" /> Lesson PDF Document
                                           </span>
-                                          <a href={resolvedLocalUrl} download={`${activeLesson.title}.pdf`} className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 text-[11px]">
+                                          <a href={resolvedLocalUrl} download={`${currentMediaToPlay?.title || activeLesson.title}.pdf`} className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 text-[11px]">
                                             <Download className="w-3 h-3" /> Download PDF
                                           </a>
                                         </div>
-                                        <iframe src={resolvedLocalUrl} className="w-full h-full min-h-[380px] border-none" title={activeLesson.title} />
+                                        <iframe src={resolvedLocalUrl} className="w-full h-full min-h-[380px] border-none" title={currentMediaToPlay?.title || activeLesson.title} />
                                       </div>
                                     );
                                   }
                                   return (
-                                    <video 
-                                      src={resolvedLocalUrl} 
-                                      controls 
-                                      className="w-full h-full object-contain" 
-                                    />
+                                    <div className="w-full h-full relative group bg-black flex items-center justify-center">
+                                      <video 
+                                        key={resolvedLocalUrl}
+                                        src={resolvedLocalUrl} 
+                                        controls 
+                                        autoPlay
+                                        playsInline
+                                        className="w-full h-full object-contain bg-black" 
+                                      />
+                                      {currentMediaToPlay?.isAttachment && (
+                                        <div className="absolute top-3 left-3 pointer-events-none">
+                                          <span className="px-2.5 py-1 bg-slate-900/85 backdrop-blur-xs text-white text-[11px] font-bold rounded-md shadow-md border border-slate-700/50 flex items-center gap-1.5">
+                                            <Video className="w-3 h-3 text-red-400" />
+                                            {currentMediaToPlay.title}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
                                   );
                                 })()
                               ) : (
@@ -7911,21 +8015,21 @@ function AppContent() {
                                   <div className="space-y-1">
                                     <h5 className="text-sm font-bold text-slate-100 font-sans">Lesson File Unavailable</h5>
                                     <p className="text-xs text-slate-400 max-w-md font-sans leading-relaxed">
-                                      This lesson file (<code>{activeLesson.videoUrl.replace(/^(firestorefile_|localfile_)/, '')}</code>) could not be retrieved.
+                                      This video file (<code>{activePlayingUrl.replace(/^(firestorefile_|localfile_)/, '')}</code>) could not be loaded from storage.
                                     </p>
                                     <p className="text-[10px] text-slate-400 max-w-sm font-sans leading-relaxed pt-1 mx-auto">
-                                      Please check network connection or ask the creator to open the lesson to sync it to shared cloud storage.
+                                      If this file was uploaded locally, it is syncing to cloud storage or you can re-upload it in Edit Lesson.
                                     </p>
                                   </div>
                                 </div>
                               )
                             ) : (() => {
-                              const mediaType = getMediaType(activeLesson.videoUrl);
+                              const mediaType = getMediaType(activePlayingUrl);
                               if (mediaType === 'image') {
                                 return (
                                   <div className="w-full h-full p-4 flex flex-col items-center justify-center bg-slate-950 relative">
-                                    <img src={activeLesson.videoUrl} alt={activeLesson.title} className="max-h-full max-w-full object-contain rounded shadow-lg" referrerPolicy="no-referrer" />
-                                    <a href={activeLesson.videoUrl} target="_blank" rel="noopener noreferrer" className="absolute bottom-3 right-3 inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold rounded backdrop-blur-xs transition-all">
+                                    <img src={activePlayingUrl} alt={currentMediaToPlay?.title || activeLesson.title} className="max-h-full max-w-full object-contain rounded shadow-lg" referrerPolicy="no-referrer" />
+                                    <a href={activePlayingUrl} target="_blank" rel="noopener noreferrer" className="absolute bottom-3 right-3 inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold rounded backdrop-blur-xs transition-all">
                                       <ExternalLink className="w-3 h-3" /> View Image
                                     </a>
                                   </div>
@@ -7938,32 +8042,45 @@ function AppContent() {
                                       <span className="font-semibold flex items-center gap-1.5 text-slate-200">
                                         <FileText className="w-4 h-4 text-red-400" /> Lesson PDF Document
                                       </span>
-                                      <a href={activeLesson.videoUrl} target="_blank" rel="noopener noreferrer" className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 text-[11px]">
+                                      <a href={activePlayingUrl} target="_blank" rel="noopener noreferrer" className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 text-[11px]">
                                         <ExternalLink className="w-3 h-3" /> Open Full PDF
                                       </a>
                                     </div>
-                                    <iframe src={activeLesson.videoUrl} className="w-full h-full min-h-[380px] border-none" title={activeLesson.title} />
+                                    <iframe src={activePlayingUrl} className="w-full h-full min-h-[380px] border-none" title={currentMediaToPlay?.title || activeLesson.title} />
                                   </div>
                                 );
                               }
                               if (mediaType === 'video') {
                                 return (
-                                  <video 
-                                    src={activeLesson.videoUrl} 
-                                    controls 
-                                    className="w-full h-full object-contain" 
-                                    referrerPolicy="no-referrer"
-                                  />
+                                  <div className="w-full h-full relative group bg-black flex items-center justify-center">
+                                    <video 
+                                      key={activePlayingUrl}
+                                      src={activePlayingUrl} 
+                                      controls 
+                                      autoPlay
+                                      playsInline
+                                      className="w-full h-full object-contain bg-black" 
+                                      referrerPolicy="no-referrer"
+                                    />
+                                    {currentMediaToPlay?.isAttachment && (
+                                      <div className="absolute top-3 left-3 pointer-events-none">
+                                        <span className="px-2.5 py-1 bg-slate-900/85 backdrop-blur-xs text-white text-[11px] font-bold rounded-md shadow-md border border-slate-700/50 flex items-center gap-1.5">
+                                          <Video className="w-3 h-3 text-red-400" />
+                                          {currentMediaToPlay.title}
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
                                 );
                               }
                               return (
                                 <iframe 
-                                  src={getEmbedUrl(activeLesson.videoUrl)} 
+                                  src={getEmbedUrl(activePlayingUrl)} 
                                   className="w-full h-full border-none"
                                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
                                   allowFullScreen
                                   referrerPolicy="strict-origin-when-cross-origin"
-                                  title={activeLesson.title}
+                                  title={currentMediaToPlay?.title || activeLesson.title}
                                 />
                               );
                             })()}
@@ -8050,6 +8167,14 @@ function AppContent() {
                         <LessonAttachmentViewer 
                           attachments={activeLesson.attachments} 
                           lessonTitle={activeLesson.title} 
+                          onPlayVideoInPlayer={(att) => {
+                            setActiveCustomMedia({ id: att.id, title: att.name, url: att.url, fileType: att.fileType, isAttachment: true });
+                            const playerEl = document.getElementById('lesson-video-player-area');
+                            if (playerEl) {
+                              playerEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }
+                            toast.success(`Playing "${att.name}" in course player above`);
+                          }}
                         />
 
                         {/* Student Homework Card */}
@@ -8344,7 +8469,8 @@ function AppContent() {
                           </Button>
                         </div>
                       </Card>
-                    ) : (
+                      );
+                    })() : (
                       <Card className="border-slate-200 bg-white p-16 text-center shadow-xs flex flex-col items-center justify-center space-y-4 h-96">
                         <div className="w-16 h-16 bg-slate-50 text-slate-400 rounded-full flex items-center justify-center border border-slate-100 shadow-xs">
                           <BookOpen className="w-8 h-8" />
