@@ -163,7 +163,6 @@ import {
   UserLessonProgress
 } from './types';
 import { LessonAttachmentManager, LessonAttachmentViewer } from './components/LessonAttachments';
-import { RobustVideoPlayer } from './components/RobustVideoPlayer';
 import { GoogleGenAI } from "@google/genai";
 
 // Initialize Gemini for drafting alerts
@@ -7419,7 +7418,7 @@ function AppContent() {
               if (clean.startsWith('data:image/') || /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(clean)) {
                 return 'image';
               }
-              if (clean.startsWith('data:application/pdf') || clean.endsWith('.pdf')) {
+              if (clean.startsWith('data:application/pdf') || clean.endsWith('.pdf') || clean.includes('.pdf')) {
                 return 'pdf';
               }
               if (clean.startsWith('data:video/') || isDirectVideo(url)) {
@@ -7916,20 +7915,22 @@ function AppContent() {
 
                       return (
                       <Card className="border-slate-200 bg-white shadow-xs overflow-hidden flex flex-col">
-                        {/* Video Switcher Bar (when multiple videos exist in lesson) */}
+                        {/* Video / Media Switcher Bar (when multiple media files exist in lesson) */}
                         {allLessonVideos.length > 1 && (
                           <div className="bg-slate-900 border-b border-slate-800 px-4 py-2.5 flex items-center justify-between gap-2 overflow-x-auto custom-scrollbar">
                             <div className="flex items-center gap-2 shrink-0">
                               <div className="p-1 bg-red-600/20 text-red-400 rounded">
-                                <Video className="w-3.5 h-3.5" />
+                                <FileVideo className="w-3.5 h-3.5" />
                               </div>
                               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300 font-mono">
-                                Video Tracks ({allLessonVideos.length})
+                                Media Files ({allLessonVideos.length})
                               </span>
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
                               {allLessonVideos.map((v) => {
                                 const isSelected = activePlayingUrl === v.url;
+                                const isPdfItem = v.fileType?.includes('pdf') || v.url.toLowerCase().includes('.pdf');
+                                const isImgItem = v.fileType?.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(v.url);
                                 return (
                                   <button
                                     key={v.id}
@@ -7941,7 +7942,13 @@ function AppContent() {
                                         : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white'
                                     }`}
                                   >
-                                    <Play className="w-3 h-3 fill-current" />
+                                    {isPdfItem ? (
+                                      <FileText className="w-3 h-3 text-red-300" />
+                                    ) : isImgItem ? (
+                                      <ImageIcon className="w-3 h-3 text-sky-300" />
+                                    ) : (
+                                      <Download className="w-3 h-3 text-slate-300" />
+                                    )}
                                     <span className="truncate max-w-[170px]">{v.title}</span>
                                   </button>
                                 );
@@ -7950,14 +7957,21 @@ function AppContent() {
                           </div>
                         )}
 
-                        {/* Video Screen Area */}
+                        {/* Video / Document / PDF Screen Area */}
                         {activePlayingUrl ? (
-                          <div id="lesson-video-player-area" className="aspect-video w-full bg-slate-950 relative border-b border-slate-200 overflow-hidden flex items-center justify-center">
+                          <div 
+                            id="lesson-video-player-area" 
+                            className={`w-full bg-slate-950 relative border-b border-slate-200 overflow-hidden flex items-center justify-center ${
+                              getMediaType(activePlayingUrl, resolvedLocalType) === 'pdf'
+                                ? 'min-h-[620px] h-[75vh]'
+                                : 'aspect-video'
+                            }`}
+                          >
                             {(activePlayingUrl.startsWith('localfile_') || activePlayingUrl.startsWith('firestorefile_') || activePlayingUrl.startsWith('data:') || activePlayingUrl.startsWith('blob:')) ? (
                               isResolvingLocalVideo ? (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 space-y-2">
                                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500"></div>
-                                  <span className="text-xs font-semibold font-mono">Loading video directly from storage...</span>
+                                  <span className="text-xs font-semibold font-mono">Loading lesson file from storage...</span>
                                 </div>
                               ) : resolvedLocalUrl ? (
                                 (() => {
@@ -7975,35 +7989,64 @@ function AppContent() {
                                   if (mediaType === 'pdf') {
                                     return (
                                       <div className="w-full h-full bg-slate-900 flex flex-col">
-                                        <div className="p-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-slate-300 px-4 text-xs">
-                                          <span className="font-semibold flex items-center gap-1.5 text-slate-200">
-                                            <FileText className="w-4 h-4 text-red-400" /> Lesson PDF Document
+                                        <div className="p-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-slate-300 px-4 text-xs">
+                                          <span className="font-semibold flex items-center gap-2 text-slate-200 truncate pr-2">
+                                            <FileText className="w-4 h-4 text-red-400 shrink-0" />
+                                            <span className="truncate">Lesson PDF Document: <strong className="text-white">{currentMediaToPlay?.title || activeLesson.title}</strong></span>
                                           </span>
-                                          <a href={resolvedLocalUrl} download={`${currentMediaToPlay?.title || activeLesson.title}.pdf`} className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 text-[11px]">
-                                            <Download className="w-3 h-3" /> Download PDF
-                                          </a>
+                                          <div className="flex items-center gap-2.5 shrink-0">
+                                            <a href={resolvedLocalUrl} target="_blank" rel="noopener noreferrer" className="text-slate-300 hover:text-white font-semibold flex items-center gap-1 text-[11px] transition-colors">
+                                              <ExternalLink className="w-3 h-3" /> Open in New Tab
+                                            </a>
+                                            <a href={resolvedLocalUrl} download={`${currentMediaToPlay?.title || activeLesson.title}.pdf`} className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-600 hover:bg-red-500 text-white font-semibold rounded text-[11px] transition-colors shadow-xs">
+                                              <Download className="w-3 h-3" /> Download PDF
+                                            </a>
+                                          </div>
                                         </div>
-                                        <iframe src={resolvedLocalUrl} className="w-full h-full min-h-[380px] border-none" title={currentMediaToPlay?.title || activeLesson.title} />
+                                        <iframe src={resolvedLocalUrl} className="w-full flex-1 border-none bg-white" title={currentMediaToPlay?.title || activeLesson.title} />
                                       </div>
                                     );
                                   }
+                                  
+                                  // For Videos: Do NOT render in-app video player. Provide clean, dedicated Download card!
+                                  const videoTitle = currentMediaToPlay?.title || activeLesson.title;
+                                  const downloadFileName = `${videoTitle.replace(/[/\\?%*:|"<>]/g, '_')}.mp4`;
                                   return (
-                                    <div className="absolute inset-0 w-full h-full">
-                                      <RobustVideoPlayer 
-                                        key={resolvedLocalUrl}
-                                        src={resolvedLocalUrl} 
-                                        storageKey={activePlayingUrl}
-                                        title={currentMediaToPlay?.title || activeLesson.title}
-                                        mimeType={resolvedLocalType || 'video/mp4'}
-                                        downloadFileName={`${currentMediaToPlay?.title || activeLesson.title}.mp4`}
-                                        autoPlay={true}
-                                        badge={currentMediaToPlay?.isAttachment ? currentMediaToPlay.title : undefined}
-                                        onVideoRepaired={(newUrl) => {
-                                          setResolvedLocalUrl(newUrl);
-                                          setResolvedLocalType('video/mp4');
-                                          toast.success("Video successfully repaired and converted to universal MP4!");
-                                        }}
-                                      />
+                                    <div className="w-full h-full p-8 flex flex-col items-center justify-center text-center bg-radial from-slate-900 via-slate-950 to-black relative select-none">
+                                      <div className="max-w-md w-full p-7 bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl flex flex-col items-center space-y-4">
+                                        <div className="w-16 h-16 rounded-2xl bg-red-950/70 border border-red-800/50 text-red-400 flex items-center justify-center shadow-lg">
+                                          <FileVideo className="w-8 h-8 text-red-400" />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-950 text-red-300 text-[10px] font-bold uppercase tracking-wider font-mono border border-red-800">
+                                            <Download className="w-3 h-3" /> Video Download
+                                          </span>
+                                          <h4 className="text-base font-bold text-white pt-1">
+                                            {videoTitle}
+                                          </h4>
+                                          <p className="text-xs text-slate-400 max-w-sm font-sans leading-relaxed">
+                                            This video is available for download to play directly on your device in your preferred media player (e.g. QuickTime, VLC, Windows Media Player) with full video and audio.
+                                          </p>
+                                        </div>
+
+                                        <div className="pt-2 flex flex-col sm:flex-row items-center gap-2.5 w-full justify-center">
+                                          <a
+                                            href={resolvedLocalUrl}
+                                            download={downloadFileName}
+                                            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl shadow-lg hover:shadow-red-900/40 transition-all cursor-pointer"
+                                          >
+                                            <Download className="w-4 h-4" /> Download Video File
+                                          </a>
+                                          <a
+                                            href={resolvedLocalUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-semibold text-xs rounded-xl border border-slate-700 transition-all"
+                                          >
+                                            <ExternalLink className="w-3.5 h-3.5" /> Open in New Tab
+                                          </a>
+                                        </div>
+                                      </div>
                                     </div>
                                   );
                                 })()
@@ -8038,33 +8081,63 @@ function AppContent() {
                               if (mediaType === 'pdf') {
                                 return (
                                   <div className="w-full h-full bg-slate-900 flex flex-col">
-                                    <div className="p-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-slate-300 px-4 text-xs">
-                                      <span className="font-semibold flex items-center gap-1.5 text-slate-200">
-                                        <FileText className="w-4 h-4 text-red-400" /> Lesson PDF Document
+                                    <div className="p-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-slate-300 px-4 text-xs">
+                                      <span className="font-semibold flex items-center gap-2 text-slate-200 truncate pr-2">
+                                        <FileText className="w-4 h-4 text-red-400 shrink-0" />
+                                        <span className="truncate">Lesson PDF Document: <strong className="text-white">{currentMediaToPlay?.title || activeLesson.title}</strong></span>
                                       </span>
-                                      <a href={activePlayingUrl} target="_blank" rel="noopener noreferrer" className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 text-[11px]">
-                                        <ExternalLink className="w-3 h-3" /> Open Full PDF
-                                      </a>
+                                      <div className="flex items-center gap-2.5 shrink-0">
+                                        <a href={activePlayingUrl} target="_blank" rel="noopener noreferrer" className="text-slate-300 hover:text-white font-semibold flex items-center gap-1 text-[11px] transition-colors">
+                                          <ExternalLink className="w-3 h-3" /> Open in New Tab
+                                        </a>
+                                        <a href={activePlayingUrl} download={`${currentMediaToPlay?.title || activeLesson.title}.pdf`} className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-600 hover:bg-red-500 text-white font-semibold rounded text-[11px] transition-colors shadow-xs">
+                                          <Download className="w-3 h-3" /> Download PDF
+                                        </a>
+                                      </div>
                                     </div>
-                                    <iframe src={activePlayingUrl} className="w-full h-full min-h-[380px] border-none" title={currentMediaToPlay?.title || activeLesson.title} />
+                                    <iframe src={activePlayingUrl} className="w-full flex-1 border-none bg-white" title={currentMediaToPlay?.title || activeLesson.title} />
                                   </div>
                                 );
                               }
                               if (mediaType === 'video') {
+                                const videoTitle = currentMediaToPlay?.title || activeLesson.title;
+                                const downloadFileName = `${videoTitle.replace(/[/\\?%*:|"<>]/g, '_')}.mp4`;
                                 return (
-                                  <div className="absolute inset-0 w-full h-full">
-                                    <RobustVideoPlayer 
-                                      key={activePlayingUrl}
-                                      src={activePlayingUrl} 
-                                      storageKey={activePlayingUrl}
-                                      title={currentMediaToPlay?.title || activeLesson.title}
-                                      downloadFileName={`${currentMediaToPlay?.title || activeLesson.title}.mp4`}
-                                      autoPlay={true}
-                                      badge={currentMediaToPlay?.isAttachment ? currentMediaToPlay.title : undefined}
-                                      onVideoRepaired={() => {
-                                        toast.success("Video successfully repaired and converted to universal MP4!");
-                                      }}
-                                    />
+                                  <div className="w-full h-full p-8 flex flex-col items-center justify-center text-center bg-radial from-slate-900 via-slate-950 to-black relative select-none">
+                                    <div className="max-w-md w-full p-7 bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl flex flex-col items-center space-y-4">
+                                      <div className="w-16 h-16 rounded-2xl bg-red-950/70 border border-red-800/50 text-red-400 flex items-center justify-center shadow-lg">
+                                        <FileVideo className="w-8 h-8 text-red-400" />
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-950 text-red-300 text-[10px] font-bold uppercase tracking-wider font-mono border border-red-800">
+                                          <Download className="w-3 h-3" /> Video Download
+                                        </span>
+                                        <h4 className="text-base font-bold text-white pt-1">
+                                          {videoTitle}
+                                        </h4>
+                                        <p className="text-xs text-slate-400 max-w-sm font-sans leading-relaxed">
+                                          This video is available for download to play directly on your device in your preferred media player (e.g. QuickTime, VLC, Windows Media Player) with full video and audio.
+                                        </p>
+                                      </div>
+
+                                      <div className="pt-2 flex flex-col sm:flex-row items-center gap-2.5 w-full justify-center">
+                                        <a
+                                          href={activePlayingUrl}
+                                          download={downloadFileName}
+                                          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl shadow-lg hover:shadow-red-900/40 transition-all cursor-pointer"
+                                        >
+                                          <Download className="w-4 h-4" /> Download Video File
+                                        </a>
+                                        <a
+                                          href={activePlayingUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-semibold text-xs rounded-xl border border-slate-700 transition-all"
+                                        >
+                                          <ExternalLink className="w-3.5 h-3.5" /> Open in New Tab
+                                        </a>
+                                      </div>
+                                    </div>
                                   </div>
                                 );
                               }

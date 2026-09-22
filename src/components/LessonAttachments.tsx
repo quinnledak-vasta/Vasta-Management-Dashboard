@@ -26,7 +26,6 @@ import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { LessonAttachment } from '../types';
 import { saveLocalVideo, getLocalVideoBlob, dataUrlToBlobAsync } from '../lib/videoCache';
-import { RobustVideoPlayer } from './RobustVideoPlayer';
 import { toast } from 'sonner';
 
 export function getAttachmentIcon(attachment: LessonAttachment | { name: string; url?: string; fileType?: string }) {
@@ -505,8 +504,7 @@ export function LessonAttachmentViewer({ attachments, lessonTitle, onPlayVideoIn
         {attachments.map((att) => {
           const isLink = att.type === 'link';
           const isVideo = isVideoAttachment(att);
-          const canPreviewInline = !isLink && (
-            isVideo ||
+          const canPreviewInline = !isLink && !isVideo && (
             (att.fileType || '').includes('image') || 
             (att.fileType || '').includes('pdf') || 
             /\.(png|jpe?g|gif|webp|svg|pdf)$/i.test(att.name)
@@ -541,67 +539,56 @@ export function LessonAttachmentViewer({ attachments, lessonTitle, onPlayVideoIn
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
-                {/* Watch Video or Inline Preview Button */}
+                {/* PDF & Image In-App View Button */}
                 {canPreviewInline && (
                   <Button
                     type="button"
-                    variant={isVideo ? "default" : "ghost"}
+                    variant="ghost"
                     size="xs"
                     onClick={() => handlePreview(att)}
                     disabled={downloadingId === att.id}
-                    className={`h-7 px-2.5 text-[10px] font-bold rounded-md transition-colors ${
-                      isVideo 
-                        ? 'bg-red-600 hover:bg-red-700 text-white shadow-2xs' 
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                    title={isVideo ? "Watch video directly" : "Preview file"}
+                    className="h-7 px-2.5 text-[10px] font-bold rounded-md transition-colors text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                    title="View directly in app"
                   >
-                    {isVideo ? (
-                      <>
-                        <Play className="w-3 h-3 mr-1 fill-current" /> Watch
-                      </>
-                    ) : (
-                      <>
-                        <Eye className="w-3 h-3 mr-1" /> View
-                      </>
-                    )}
+                    <Eye className="w-3 h-3 mr-1" /> View
                   </Button>
                 )}
 
-                {/* Optional button to switch video directly into main course player */}
-                {isVideo && onPlayVideoInPlayer && (
+                {/* For Videos: Prominent Direct Download Button */}
+                {isVideo ? (
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="xs"
+                    onClick={() => handleOpenOrDownload(att)}
+                    disabled={downloadingId === att.id}
+                    className="h-7 px-2.5 text-[10px] font-bold rounded-md bg-red-600 hover:bg-red-700 text-white shadow-2xs flex items-center"
+                    title="Download video to play on device"
+                  >
+                    <Download className="w-3 h-3 mr-1" /> Download Video
+                  </Button>
+                ) : (
+                  /* Download Button for non-video attachments */
                   <Button
                     type="button"
                     variant="outline"
                     size="xs"
-                    onClick={() => onPlayVideoInPlayer(att)}
-                    className="h-7 px-2 text-[10px] font-semibold text-slate-700 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border-slate-200 rounded-md"
-                    title="Play in main video screen above"
+                    onClick={() => handleOpenOrDownload(att)}
+                    disabled={downloadingId === att.id}
+                    className="h-7 px-2 text-[10px] font-medium text-slate-600 hover:text-slate-900 bg-white border-slate-200 hover:bg-slate-50 rounded-md"
+                    title="Download offline copy"
                   >
-                    <Video className="w-3 h-3 mr-1 text-slate-500" /> Player
+                    {isLink ? (
+                      <>
+                        <ExternalLink className="w-3 h-3 mr-1 text-blue-500" /> Open
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-3 h-3 mr-1 text-slate-500" /> Download
+                      </>
+                    )}
                   </Button>
                 )}
-
-                {/* Download Button */}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  onClick={() => handleOpenOrDownload(att)}
-                  disabled={downloadingId === att.id}
-                  className="h-7 px-2 text-[10px] font-medium text-slate-600 hover:text-slate-900 bg-white border-slate-200 hover:bg-slate-50 rounded-md"
-                  title="Download offline copy"
-                >
-                  {isLink ? (
-                    <>
-                      <ExternalLink className="w-3 h-3 mr-1 text-blue-500" /> Open
-                    </>
-                  ) : (
-                    <>
-                      <Download className="w-3 h-3 mr-1 text-slate-500" /> Download
-                    </>
-                  )}
-                </Button>
               </div>
             </div>
           );
@@ -657,20 +644,28 @@ export function LessonAttachmentViewer({ attachments, lessonTitle, onPlayVideoIn
 
             <div className="flex-1 overflow-auto min-h-[420px] flex items-center justify-center bg-slate-950 rounded-xl p-2 shadow-inner">
               {isVideoAttachment({ name: previewAttachment.name, fileType: previewAttachment.type, url: previewAttachment.url }) ? (
-                <div className="w-full h-[65vh] min-h-[400px] flex flex-col items-center justify-center relative rounded-xl overflow-hidden bg-black">
-                  <RobustVideoPlayer
-                    src={previewAttachment.url}
-                    storageKey={previewAttachment.url}
-                    title={previewAttachment.name}
-                    mimeType={previewAttachment.type || 'video/mp4'}
-                    downloadFileName={previewAttachment.name}
-                    autoPlay={true}
-                    badge="Attachment Video"
-                    onVideoRepaired={(newUrl) => {
-                      setPreviewAttachment(prev => prev ? { ...prev, url: newUrl } : null);
-                      toast.success("Attachment video successfully repaired to universal MP4!");
-                    }}
-                  />
+                <div className="w-full h-[55vh] min-h-[360px] flex flex-col items-center justify-center text-center p-6 bg-slate-900 rounded-xl space-y-4">
+                  <div className="w-16 h-16 rounded-2xl bg-red-950/70 border border-red-800/50 text-red-400 flex items-center justify-center shadow-lg">
+                    <FileVideo className="w-8 h-8 text-red-400" />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-950 text-red-300 text-[10px] font-bold uppercase tracking-wider font-mono border border-red-800">
+                      Video Download
+                    </span>
+                    <h4 className="text-base font-bold text-white pt-1">{previewAttachment.name}</h4>
+                    <p className="text-xs text-slate-400 max-w-sm font-sans leading-relaxed">
+                      This video is available for download to play directly on your device.
+                    </p>
+                  </div>
+                  <div className="pt-2 flex items-center gap-3">
+                    <a
+                      href={previewAttachment.url}
+                      download={previewAttachment.name}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl shadow-lg transition-all"
+                    >
+                      <Download className="w-4 h-4" /> Download Video File
+                    </a>
+                  </div>
                 </div>
               ) : previewAttachment.type.includes('pdf') || previewAttachment.name.toLowerCase().endsWith('.pdf') ? (
                 <iframe
