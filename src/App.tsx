@@ -7992,11 +7992,17 @@ function AppContent() {
                                       <RobustVideoPlayer 
                                         key={resolvedLocalUrl}
                                         src={resolvedLocalUrl} 
+                                        storageKey={activePlayingUrl}
                                         title={currentMediaToPlay?.title || activeLesson.title}
                                         mimeType={resolvedLocalType || 'video/mp4'}
                                         downloadFileName={`${currentMediaToPlay?.title || activeLesson.title}.mp4`}
                                         autoPlay={true}
                                         badge={currentMediaToPlay?.isAttachment ? currentMediaToPlay.title : undefined}
+                                        onVideoRepaired={(newUrl) => {
+                                          setResolvedLocalUrl(newUrl);
+                                          setResolvedLocalType('video/mp4');
+                                          toast.success("Video successfully repaired and converted to universal MP4!");
+                                        }}
                                       />
                                     </div>
                                   );
@@ -8050,10 +8056,14 @@ function AppContent() {
                                     <RobustVideoPlayer 
                                       key={activePlayingUrl}
                                       src={activePlayingUrl} 
+                                      storageKey={activePlayingUrl}
                                       title={currentMediaToPlay?.title || activeLesson.title}
                                       downloadFileName={`${currentMediaToPlay?.title || activeLesson.title}.mp4`}
                                       autoPlay={true}
                                       badge={currentMediaToPlay?.isAttachment ? currentMediaToPlay.title : undefined}
+                                      onVideoRepaired={() => {
+                                        toast.success("Video successfully repaired and converted to universal MP4!");
+                                      }}
                                     />
                                   </div>
                                 );

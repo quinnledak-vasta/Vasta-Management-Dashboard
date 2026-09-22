@@ -660,11 +660,16 @@ export function LessonAttachmentViewer({ attachments, lessonTitle, onPlayVideoIn
                 <div className="w-full h-[65vh] min-h-[400px] flex flex-col items-center justify-center relative rounded-xl overflow-hidden bg-black">
                   <RobustVideoPlayer
                     src={previewAttachment.url}
+                    storageKey={previewAttachment.url}
                     title={previewAttachment.name}
                     mimeType={previewAttachment.type || 'video/mp4'}
                     downloadFileName={previewAttachment.name}
                     autoPlay={true}
                     badge="Attachment Video"
+                    onVideoRepaired={(newUrl) => {
+                      setPreviewAttachment(prev => prev ? { ...prev, url: newUrl } : null);
+                      toast.success("Attachment video successfully repaired to universal MP4!");
+                    }}
                   />
                 </div>
               ) : previewAttachment.type.includes('pdf') || previewAttachment.name.toLowerCase().endsWith('.pdf') ? (

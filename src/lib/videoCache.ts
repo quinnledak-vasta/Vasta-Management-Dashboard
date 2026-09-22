@@ -144,6 +144,30 @@ export async function saveLocalVideo(file: File): Promise<string> {
     blob = new Blob([file], { type: normalizedMime });
   }
 
+  // Auto-transcode iPhone .mov / QuickTime / HEVC videos on upload to universal H.264 MP4
+  const isMovOrQuickTime = file.type === 'video/quicktime' || /\.mov$/i.test(file.name);
+  if (isMovOrQuickTime) {
+    try {
+      const transcodeRes = await fetch('/api/transcode-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Original-Name': encodeURIComponent(cleanName)
+        },
+        body: blob
+      });
+      if (transcodeRes.ok) {
+        const transcodedBlob = await transcodeRes.blob();
+        if (transcodedBlob.size > 0) {
+          blob = new Blob([transcodedBlob], { type: 'video/mp4' });
+          console.log(`Auto-transcoded video upload ${file.name} to universal H.264 MP4 (${blob.size} bytes)`);
+        }
+      }
+    } catch (err) {
+      console.warn('Auto-transcode skipped on upload:', err);
+    }
+  }
+
   // Save to IndexedDB locally for instant availability under multiple keys
   await new Promise<void>((resolve, reject) => {
     const transaction = dbInst.transaction(STORE_NAME, 'readwrite');
@@ -452,6 +476,55 @@ export async function getLocalVideoBlob(id: string, fallbackName?: string): Prom
   }
 
   return null;
+}
+
+export async function replaceStoredVideo(id: string, newBlob: Blob, originalName?: string): Promise<void> {
+  if (!id || !newBlob || newBlob.size === 0) return;
+
+  const rawCleanId = id.replace(/^(firestorefile_|localfile_)/, '');
+  const fileId = rawCleanId.startsWith('file_') ? rawCleanId : `file_${rawCleanId}`;
+  const cleanName = originalName ? originalName.replace(/[^a-zA-Z0-9._-]/g, '_') : '';
+
+  try {
+    const dbInst = await getDB();
+    const writeTx = dbInst.transaction(STORE_NAME, 'readwrite');
+    const store = writeTx.objectStore(STORE_NAME);
+    store.put(newBlob, id);
+    store.put(newBlob, rawCleanId);
+    store.put(newBlob, fileId);
+    store.put(newBlob, `firestorefile_${fileId}`);
+    if (cleanName) store.put(newBlob, cleanName);
+    if (originalName) store.put(newBlob, originalName);
+    await new Promise<void>((resolve, reject) => {
+      writeTx.oncomplete = () => resolve();
+      writeTx.onerror = () => reject(writeTx.error);
+    });
+
+    // Reset sync key tracking so the new transcoded version uploads to Firestore
+    syncedKeys.delete(fileId);
+    syncedKeys.delete(rawCleanId);
+    syncedKeys.delete(id);
+
+    const fileName = originalName || id;
+    const dataUrl = await fileToDataUrl(newBlob);
+    const chunks = chunkString(dataUrl, 350000);
+
+    const metaRef = doc(db, 'lesson_files', fileId);
+    await setDoc(metaRef, {
+      id: fileId,
+      fileName,
+      fileType: 'video/mp4',
+      size: newBlob.size,
+      totalChunks: chunks.length,
+      createdAt: new Date().toISOString(),
+      transcoded: true
+    });
+
+    await uploadChunksToFirestore(fileId, chunks);
+    console.log(`Updated stored video ${fileId} with transcoded universal MP4 (${chunks.length} chunks)`);
+  } catch (err) {
+    console.warn(`Failed to replace stored video ${id}:`, err);
+  }
 }
 
 export async function deleteLocalVideo(id: string): Promise<void> {

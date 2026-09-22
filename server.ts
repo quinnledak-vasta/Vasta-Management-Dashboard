@@ -1,5 +1,9 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
+import os from "os";
+import { exec } from "child_process";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import sgMail from "@sendgrid/mail";
 import nodemailer from "nodemailer";
@@ -172,7 +176,7 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: "10mb" }));
+  app.use(express.json({ limit: "100mb" }));
 
   // Health endpoint
   app.get("/api/health", (_req, res) => {
@@ -180,6 +184,111 @@ async function startServer() {
       status: "ok", 
       time: new Date().toISOString()
     });
+  });
+
+  // Transcoding status endpoint
+  app.get("/api/transcode-status", (_req, res) => {
+    exec("ffmpeg -version", (err, stdout) => {
+      res.json({
+        available: !err,
+        version: stdout ? stdout.split("\n")[0] : null,
+        timestamp: new Date().toISOString()
+      });
+    });
+  });
+
+  // Video transcoding endpoint: Converts ANY video (HEVC, Apple ProRes, 10-bit HDR, QuickTime, WebM, AVI, etc.)
+  // to universal web-compatible H.264 (YUV420P 8-bit) + AAC stereo MP4
+  app.post("/api/transcode-video", async (req, res) => {
+    const runId = crypto.randomBytes(8).toString("hex");
+    const tempDir = os.tmpdir();
+    const inputPath = path.join(tempDir, `transcode_in_${runId}.tmp`);
+    const outputPath = path.join(tempDir, `transcode_out_${runId}.mp4`);
+
+    const cleanup = () => {
+      try { if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath); } catch {}
+      try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
+    };
+
+    try {
+      const contentType = req.headers["content-type"] || "";
+      
+      // 1. If payload was parsed as JSON (e.g. { dataUrl, url, base64 })
+      if (contentType.includes("application/json")) {
+        const { dataUrl, base64, url } = req.body || {};
+        if (dataUrl && typeof dataUrl === "string") {
+          const base64Data = dataUrl.replace(/^data:[^;]+;base64,/, "");
+          await fs.promises.writeFile(inputPath, Buffer.from(base64Data, "base64"));
+        } else if (base64 && typeof base64 === "string") {
+          await fs.promises.writeFile(inputPath, Buffer.from(base64, "base64"));
+        } else if (url && typeof url === "string") {
+          if (url.startsWith("data:")) {
+            const base64Data = url.replace(/^data:[^;]+;base64,/, "");
+            await fs.promises.writeFile(inputPath, Buffer.from(base64Data, "base64"));
+          } else {
+            const fetchRes = await fetch(url);
+            if (!fetchRes.ok) throw new Error(`Failed to fetch video source url: ${fetchRes.statusText}`);
+            const arrayBuffer = await fetchRes.arrayBuffer();
+            await fs.promises.writeFile(inputPath, Buffer.from(arrayBuffer));
+          }
+        } else {
+          return res.status(400).json({ error: "Missing video source (dataUrl, base64, or url)" });
+        }
+      } else {
+        // 2. Stream binary payload directly into inputPath
+        const writeStream = fs.createWriteStream(inputPath);
+        await new Promise<void>((resolve, reject) => {
+          req.pipe(writeStream);
+          req.on("error", reject);
+          writeStream.on("finish", resolve);
+          writeStream.on("error", reject);
+        });
+      }
+
+      // Verify input file was created and has non-zero size
+      const inputStat = await fs.promises.stat(inputPath);
+      if (inputStat.size === 0) {
+        cleanup();
+        return res.status(400).json({ error: "Received empty video file (0 bytes)" });
+      }
+
+      // 3. Execute FFmpeg
+      // -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" ensures dimensions are even numbers (required by libx264)
+      // -pix_fmt yuv420p normalizes 10-bit HDR / HEVC to universal 8-bit YUV420P
+      // -c:v libx264 universal H.264
+      // -movflags +faststart moves moov atom to start of file for immediate web streaming
+      // -c:a aac -b:a 128k universal AAC stereo audio
+      const ffmpegCmd = `ffmpeg -y -i "${inputPath}" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 128k -ar 44100 "${outputPath}"`;
+
+      await new Promise<void>((resolve, reject) => {
+        exec(ffmpegCmd, (err, _stdout, stderr) => {
+          if (err) {
+            console.error("FFmpeg transcode error:", stderr);
+            reject(new Error(`FFmpeg failed: ${stderr || err.message}`));
+          } else {
+            resolve();
+          }
+        });
+      });
+
+      const outputStat = await fs.promises.stat(outputPath);
+      res.setHeader("Content-Type", "video/mp4");
+      res.setHeader("Content-Length", outputStat.size);
+      res.setHeader("Content-Disposition", 'inline; filename="video.mp4"');
+      res.setHeader("X-Transcoded-Codec", "h264");
+      res.setHeader("X-Transcoded-Audio", "aac");
+      res.setHeader("X-Transcoded-PixFmt", "yuv420p");
+
+      const readStream = fs.createReadStream(outputPath);
+      readStream.pipe(res);
+
+      res.on("finish", cleanup);
+      res.on("close", cleanup);
+    } catch (err: any) {
+      cleanup();
+      console.error("Transcode handler failed:", err);
+      res.status(500).json({ error: err.message || "Video transcoding failed" });
+    }
   });
 
   // Email status endpoint - checks if Google Workspace or SendGrid is configured
