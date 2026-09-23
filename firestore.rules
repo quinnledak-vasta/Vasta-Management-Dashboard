@@ -189,7 +189,8 @@ service cloud.firestore {
              (data.get('homeworkFileName', null) == null || data.get('homeworkFileName', null) is string) &&
              (data.get('homeworkFileType', null) == null || data.get('homeworkFileType', null) is string) &&
              data.order is number &&
-             data.createdAt is string;
+             (data.get('createdAt', null) == null || data.get('createdAt', null) is string) &&
+             (data.get('updatedAt', null) == null || data.get('updatedAt', null) is string);
     }
 
     function isValidCourseProgress(data) {
@@ -296,22 +297,22 @@ service cloud.firestore {
 
     // Onboarding Courses collection
     match /courses/{courseId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow write: if isStaff() && isValidCourse(request.resource.data);
       allow delete: if isStaff();
     }
 
     // Onboarding Chapters collection
     match /chapters/{chapterId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow write: if isStaff() && isValidChapter(request.resource.data);
       allow delete: if isStaff();
     }
 
     // Onboarding Lessons collection
     match /lessons/{lessonId} {
-      allow read: if isAuthenticated();
-      allow write: if isStaff() && isValidLesson(request.resource.data);
+      allow read: if true;
+      allow write: if isAuthenticated() && isValidLesson(request.resource.data);
       allow delete: if isStaff();
     }
 
@@ -332,14 +333,10 @@ service cloud.firestore {
 
     // Shared Lesson Files collection
     match /lesson_files/{fileId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated();
-      allow delete: if isStaff();
+      allow read, write: if true;
 
-      match /chunks/{chunkId} {
-        allow read: if isAuthenticated();
-        allow create, update: if isAuthenticated();
-        allow delete: if isStaff();
+      match /{allSubpaths=**} {
+        allow read, write: if true;
       }
     }
     

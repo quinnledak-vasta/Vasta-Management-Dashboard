@@ -357,75 +357,69 @@ export function LessonAttachmentViewer({ attachments, lessonTitle, onPlayVideoIn
       return;
     }
 
-    // Direct HTTP url (external download or cloud storage)
-    if (att.url.startsWith('http://') || att.url.startsWith('https://')) {
-      const toastId = toast.loading(`Preparing download for ${att.name}...`);
-      try {
-        const response = await fetch(att.url);
-        if (response.ok) {
-          const blob = await response.blob();
-          const objectUrl = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = objectUrl;
-          link.download = att.name || 'download';
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
-          toast.success(`Downloaded ${att.name}`, { id: toastId });
-          return;
-        }
-      } catch {
-        // Fallback for CORS restricted URLs
-      }
-      const link = document.createElement('a');
-      link.href = att.url;
-      link.download = att.name || 'download';
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      toast.success(`Opening ${att.name}`, { id: toastId });
-      return;
-    }
-
-    // Base64 data URL
-    if (att.url.startsWith('data:')) {
-      try {
-        const link = document.createElement('a');
-        link.href = att.url;
-        link.download = att.name || 'lesson_file';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        toast.success(`Downloaded ${att.name}`);
-        return;
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    // Local / Firestore synced file key
     setDownloadingId(att.id);
-    const toastId = toast.loading(`Retrieving ${att.name} from storage...`);
+    const toastId = toast.loading(`Preparing download for ${att.name}...`);
+
     try {
+      const cleanId = att.url
+        .replace(/^(firestorefile_|localfile_)/, '')
+        .replace(/^\/?api\/media\//, '')
+        .replace(/^\/?api\/media-download\//, '');
+
+      // Ensure proper filename and extension
+      let downloadName = att.name || 'file';
+      if (isVideoAttachment(att) && !/\.(mp4|mov|webm|mkv|avi)$/i.test(downloadName)) {
+        downloadName = `${downloadName}.mp4`;
+      }
+
+      // 1. Try dedicated server download endpoint
+      if (!att.url.startsWith('data:') && !att.url.startsWith('blob:')) {
+        const downloadUrl = att.url.startsWith('http://') || att.url.startsWith('https://')
+          ? att.url
+          : `/api/media-download/${encodeURIComponent(cleanId)}`;
+
+        try {
+          const res = await fetch(downloadUrl);
+          if (res.ok) {
+            const contentType = res.headers.get('content-type') || '';
+            if (!contentType.includes('text/html')) {
+              const blob = await res.blob();
+              if (blob.size > 500) {
+                const objectUrl = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = objectUrl;
+                link.download = downloadName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+                toast.success(`Downloaded ${downloadName}`, { id: toastId });
+                return;
+              }
+            }
+          }
+        } catch {
+          // Fall through to blob retrieval
+        }
+      }
+
+      // 2. Retrieve from storage (IndexedDB or Firestore chunks)
       const blob = await getLocalVideoBlob(att.url, att.name);
-      if (blob && blob.size > 0) {
+      if (blob && blob.size > 500) {
         const objectUrl = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = objectUrl;
-        link.download = att.name || 'lesson_file';
+        link.download = downloadName;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
-        toast.success(`Downloaded ${att.name}`, { id: toastId });
+        toast.success(`Downloaded ${downloadName}`, { id: toastId });
       } else {
         toast.error(`File could not be loaded from storage.`, { id: toastId });
       }
     } catch (err) {
-      console.error(err);
+      console.error('Download failed:', err);
       toast.error(`Failed to download ${att.name}`, { id: toastId });
     } finally {
       setDownloadingId(null);
@@ -453,7 +447,7 @@ export function LessonAttachmentViewer({ attachments, lessonTitle, onPlayVideoIn
       return;
     }
 
-    if (att.url.startsWith('http')) {
+    if (att.url.startsWith('http') || att.url.startsWith('/api/')) {
       setPreviewAttachment({ name: att.name, url: att.url, type: att.fileType || '' });
       return;
     }

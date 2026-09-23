@@ -52,6 +52,19 @@ function ensurePlayableBlob(blob: Blob | File | null, fileName?: string): Blob |
   return new Blob([blob], { type: targetMime });
 }
 
+// Helper to safely convert base64 chunk to Uint8Array without stack overflow
+export function safeBase64ToUint8Array(b64: string): Uint8Array {
+  const clean = b64.replace(/^data:[^;]+;base64,/, '').replace(/[\r\n\s]/g, '');
+  if (!clean) return new Uint8Array(0);
+  const binStr = atob(clean);
+  const len = binStr.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binStr.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export async function dataUrlToBlobAsync(dataUrl: string, fallbackMime = 'video/mp4'): Promise<Blob> {
   if (!dataUrl) return new Blob([], { type: normalizeVideoMimeType(fallbackMime) });
 
@@ -81,17 +94,7 @@ export async function dataUrlToBlobAsync(dataUrl: string, fallbackMime = 'video/
     }
 
     const normalizedMime = normalizeVideoMimeType(mime);
-    const cleanB64 = base64Data.replace(/[\r\n\s]/g, '');
-    if (!cleanB64) {
-      return new Blob([], { type: normalizedMime });
-    }
-
-    const binaryString = atob(cleanB64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
+    const bytes = safeBase64ToUint8Array(base64Data);
     return new Blob([bytes], { type: normalizedMime });
   } catch (err) {
     console.error('Error converting data URL to Blob:', err);
@@ -168,31 +171,61 @@ export async function saveLocalVideo(file: File): Promise<string> {
     }
   }
 
-  // Save to IndexedDB locally for instant availability under multiple keys
-  await new Promise<void>((resolve, reject) => {
-    const transaction = dbInst.transaction(STORE_NAME, 'readwrite');
-    const store = transaction.objectStore(STORE_NAME);
-    store.put(blob, key);
-    store.put(blob, fileId);
-    store.put(blob, cleanName);
-    store.put(blob, file.name);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
+  // 1. Upload to persistent server disk storage (/api/upload-media)
+  let serverMediaUrl = '';
+  try {
+    const uploadRes = await fetch('/api/upload-media', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-File-Name': encodeURIComponent(file.name),
+        'X-File-Type': blob.type || normalizedMime
+      },
+      body: blob
+    });
+    if (uploadRes.ok) {
+      const data = await uploadRes.json();
+      if (data.url) {
+        serverMediaUrl = data.url;
+      }
+    }
+  } catch (err) {
+    console.warn('Server disk media upload skipped/failed:', err);
+  }
 
-  // Background sync to Firestore cloud storage so all team members can access it
-  syncLocalBlobToFirestore(fileId, blob, file.name).catch((err) => {
-    console.warn('Background Firestore sync queued/warn:', err);
-  });
+  // 2. Save to IndexedDB locally for instant availability under multiple keys
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = dbInst.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      store.put(blob, key);
+      store.put(blob, fileId);
+      store.put(blob, cleanName);
+      store.put(blob, file.name);
+      if (serverMediaUrl) {
+        store.put(blob, serverMediaUrl);
+      }
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } catch (idbErr) {
+    console.warn('IndexedDB write error:', idbErr);
+  }
 
-  return key;
+  // 3. Sync to Firestore cloud storage so all team members can access it
+  try {
+    await syncLocalBlobToFirestore(fileId, blob, file.name);
+  } catch (err) {
+    console.warn('Firestore cloud sync warning:', err);
+  }
+
+  return serverMediaUrl || key;
 }
 
 const syncedKeys = new Set<string>();
 
 export async function syncLocalBlobToFirestore(id: string, blob: Blob | File, originalName?: string): Promise<void> {
-  if (!id || syncedKeys.has(id)) return;
-  syncedKeys.add(id);
+  if (!id) return;
 
   try {
     const rawCleanId = id.replace(/^(firestorefile_|localfile_)/, '');
@@ -200,11 +233,11 @@ export async function syncLocalBlobToFirestore(id: string, blob: Blob | File, or
     const metaRef = doc(db, 'lesson_files', fileId);
     const metaSnap = await getDoc(metaRef);
 
-    if (!metaSnap.exists()) {
-      const altMetaRef = doc(db, 'lesson_files', rawCleanId);
-      const altMetaSnap = await getDoc(altMetaRef);
-      if (altMetaSnap.exists()) return;
+    const isCorruptOrEmpty = !metaSnap.exists() || 
+      (metaSnap.data()?.size && metaSnap.data()?.size <= 500) || 
+      (metaSnap.data()?.totalChunks === 0);
 
+    if (isCorruptOrEmpty && blob && blob.size > 500) {
       const fileName = originalName || (blob instanceof File ? blob.name : id.replace(/^(firestorefile_|localfile_)/, '').replace(/^file_\d+_[a-z0-9]+_/, ''));
       const dataUrl = await fileToDataUrl(blob);
       const chunks = chunkString(dataUrl, 350000);
@@ -219,11 +252,15 @@ export async function syncLocalBlobToFirestore(id: string, blob: Blob | File, or
       });
 
       await uploadChunksToFirestore(fileId, chunks);
-      console.log(`Synced local blob ${id} to Firestore as ${fileId} (${chunks.length} chunks)`);
+      syncedKeys.add(id);
+      syncedKeys.add(fileId);
+      console.log(`Synced local blob ${id} to Firestore as ${fileId} (${chunks.length} chunks, ${blob.size} bytes)`);
+    } else {
+      syncedKeys.add(id);
     }
   } catch (err) {
     syncedKeys.delete(id);
-    console.warn(`Background cloud sync failed for ${id}:`, err);
+    console.warn(`Cloud sync failed for ${id}:`, err);
   }
 }
 
@@ -283,8 +320,8 @@ export async function getLocalVideoBlob(id: string, fallbackName?: string): Prom
     }
   }
 
-  // 3. Direct HTTP / HTTPS URL
-  if (id.startsWith('http://') || id.startsWith('https://')) {
+  // 3. Direct HTTP / HTTPS / API URL
+  if (id.startsWith('http://') || id.startsWith('https://') || id.startsWith('/api/')) {
     try {
       const res = await fetch(id);
       if (res.ok) {
@@ -298,6 +335,34 @@ export async function getLocalVideoBlob(id: string, fallbackName?: string): Prom
 
   const rawCleanId = id.replace(/^(firestorefile_|localfile_)/, '');
   const cleanFallbackName = fallbackName ? fallbackName.replace(/[^a-zA-Z0-9._-]/g, '_') : '';
+
+  // 3.5 Check persistent server-side media storage
+  const serverEndpointsToCheck = [
+    `/api/media/${encodeURIComponent(rawCleanId)}`,
+    `/api/media/${encodeURIComponent(id)}`,
+    ...(cleanFallbackName ? [`/api/media/${encodeURIComponent(cleanFallbackName)}`] : [])
+  ];
+
+  for (const endpoint of serverEndpointsToCheck) {
+    try {
+      const serverRes = await fetch(endpoint);
+      if (serverRes.ok) {
+        const serverBlob = await serverRes.blob();
+        if (serverBlob.size > 0) {
+          // Cache into IndexedDB for fast subsequent local reads
+          try {
+            const dbInst = await getDB();
+            const tx = dbInst.transaction(STORE_NAME, 'readwrite');
+            tx.objectStore(STORE_NAME).put(serverBlob, id);
+            tx.objectStore(STORE_NAME).put(serverBlob, rawCleanId);
+          } catch {}
+          return ensurePlayableBlob(serverBlob, fallbackName);
+        }
+      }
+    } catch {
+      // Server check failed or not found, proceed
+    }
+  }
 
   const candidateKeys = Array.from(new Set([
     id,
@@ -437,24 +502,36 @@ export async function getLocalVideoBlob(id: string, fallbackName?: string): Prom
       if (!chunksSnap.empty) {
         const chunksData = chunksSnap.docs.map(d => d.data() as { chunkIndex: number; data: string });
         chunksData.sort((a, b) => Number(a.chunkIndex) - Number(b.chunkIndex));
-        const fullDataUrl = chunksData.map(c => c.data).join('');
-        const downloadedBlob = await dataUrlToBlobAsync(fullDataUrl, docData.fileType || 'video/mp4');
 
-        if (downloadedBlob && downloadedBlob.size > 0) {
-          // Save into local IndexedDB for fast subsequent reads
-          try {
-            const dbInst = await getDB();
-            const transaction = dbInst.transaction(STORE_NAME, 'readwrite');
-            const store = transaction.objectStore(STORE_NAME);
-            store.put(downloadedBlob, id);
-            store.put(downloadedBlob, rawCleanId);
-            store.put(downloadedBlob, targetDocSnap.id);
-            if (fallbackName) {
-              store.put(downloadedBlob, fallbackName);
-            }
-          } catch {}
+        const uint8Chunks: Uint8Array[] = [];
+        for (const chunkDoc of chunksData) {
+          const dataStr = chunkDoc.data || '';
+          const bytes = safeBase64ToUint8Array(dataStr);
+          if (bytes.length > 0) {
+            uint8Chunks.push(bytes);
+          }
+        }
 
-          return ensurePlayableBlob(downloadedBlob, fallbackName || docData.fileName);
+        if (uint8Chunks.length > 0) {
+          const targetMime = normalizeVideoMimeType(docData.fileType, docData.fileName || fallbackName);
+          const downloadedBlob = new Blob(uint8Chunks, { type: targetMime });
+
+          if (downloadedBlob.size > 0) {
+            // Save into local IndexedDB for fast subsequent reads
+            try {
+              const dbInst = await getDB();
+              const transaction = dbInst.transaction(STORE_NAME, 'readwrite');
+              const store = transaction.objectStore(STORE_NAME);
+              store.put(downloadedBlob, id);
+              store.put(downloadedBlob, rawCleanId);
+              store.put(downloadedBlob, targetDocSnap.id);
+              if (fallbackName) {
+                store.put(downloadedBlob, fallbackName);
+              }
+            } catch {}
+
+            return ensurePlayableBlob(downloadedBlob, fallbackName || docData.fileName);
+          }
         }
       }
 

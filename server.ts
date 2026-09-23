@@ -8,8 +8,22 @@ import { createServer as createViteServer } from "vite";
 import sgMail from "@sendgrid/mail";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from "firebase/firestore";
 
 dotenv.config();
+
+let firestoreDb: any = null;
+try {
+  const cfgPath = path.resolve(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(cfgPath)) {
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    const fbApp = initializeApp(cfg);
+    firestoreDb = getFirestore(fbApp, cfg.firestoreDatabaseId || "(default)");
+  }
+} catch (err) {
+  console.error("Failed to initialize Firebase in server:", err);
+}
 
 interface SendGridKeyResolution {
   key: string;
@@ -253,11 +267,6 @@ async function startServer() {
       }
 
       // 3. Execute FFmpeg
-      // -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" ensures dimensions are even numbers (required by libx264)
-      // -pix_fmt yuv420p normalizes 10-bit HDR / HEVC to universal 8-bit YUV420P
-      // -c:v libx264 universal H.264
-      // -movflags +faststart moves moov atom to start of file for immediate web streaming
-      // -c:a aac -b:a 128k universal AAC stereo audio
       const ffmpegCmd = `ffmpeg -y -i "${inputPath}" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 128k -ar 44100 "${outputPath}"`;
 
       await new Promise<void>((resolve, reject) => {
@@ -288,6 +297,379 @@ async function startServer() {
       cleanup();
       console.error("Transcode handler failed:", err);
       res.status(500).json({ error: err.message || "Video transcoding failed" });
+    }
+  });
+
+  // Persistent Media Upload & Serving system for Course Videos, Attachments, and PDFs
+  const UPLOAD_DIR = path.resolve(process.cwd(), "uploads");
+  if (!fs.existsSync(UPLOAD_DIR)) {
+    try {
+      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    } catch (e) {
+      console.error("Failed to create upload directory:", e);
+    }
+  }
+
+  // Helper to ensure media file is restored from Firestore cloud storage if not present on disk
+  async function ensureMediaFileOnDisk(requestedId: string): Promise<string | null> {
+    const cleanId = decodeURIComponent(requestedId)
+      .replace(/^(firestorefile_|localfile_)/, "")
+      .replace(/^\/?api\/media\//, "")
+      .replace(/^\/?api\/media-download\//, "");
+
+    let targetPath = path.join(UPLOAD_DIR, cleanId);
+    if (fs.existsSync(targetPath)) return targetPath;
+
+    // Check directory for matching substring
+    try {
+      const files = await fs.promises.readdir(UPLOAD_DIR);
+      const match = files.find(f => !f.endsWith(".meta.json") && (f === cleanId || f.includes(cleanId) || cleanId.includes(f)));
+      if (match) return path.join(UPLOAD_DIR, match);
+    } catch {}
+
+    // If not on local disk, pull and reassemble from Firestore
+    if (!firestoreDb) return null;
+
+    try {
+      const candidates = Array.from(new Set([
+        cleanId,
+        cleanId.startsWith("file_") ? cleanId : `file_${cleanId}`,
+        cleanId.replace(/^file_/, ""),
+        `firestorefile_${cleanId}`,
+        `localfile_${cleanId}`
+      ]));
+
+      let targetDocSnap: any = null;
+      for (const cand of candidates) {
+        const snap = await getDoc(doc(firestoreDb, "lesson_files", cand));
+        if (snap.exists()) {
+          targetDocSnap = snap;
+          break;
+        }
+      }
+
+      if (!targetDocSnap) {
+        // Query all lesson_files collection
+        const allFilesSnap = await getDocs(collection(firestoreDb, "lesson_files"));
+        const candLower = cleanId.toLowerCase();
+        targetDocSnap = allFilesSnap.docs.find(d => {
+          const idLower = d.id.toLowerCase();
+          const fnLower = (d.data()?.fileName || "").toLowerCase();
+          return idLower === candLower || idLower.includes(candLower) || candLower.includes(idLower) || fnLower === candLower || candLower.includes(fnLower);
+        }) || null;
+      }
+
+      if (!targetDocSnap) return null;
+
+      const docData = targetDocSnap.data();
+      const resolvedFileId = targetDocSnap.id;
+      const finalPath = path.join(UPLOAD_DIR, resolvedFileId);
+
+      // Fetch chunks from subcollection
+      const chunksSnap = await getDocs(collection(targetDocSnap.ref, "chunks"));
+      let fullBuffer: Buffer | null = null;
+
+      if (!chunksSnap.empty) {
+        const chunkDocs = chunksSnap.docs.map(d => d.data() as { chunkIndex: number; data: string });
+        chunkDocs.sort((a, b) => Number(a.chunkIndex) - Number(b.chunkIndex));
+        const chunkBuffers = chunkDocs.map(c => {
+          const dataStr = c.data || "";
+          const cleanB64 = dataStr.replace(/^data:[^;]+;base64,/, "").replace(/[\r\n\s]/g, "");
+          return Buffer.from(cleanB64, "base64");
+        });
+        fullBuffer = Buffer.concat(chunkBuffers);
+      } else if (docData.dataUrl) {
+        const cleanB64 = docData.dataUrl.replace(/^data:[^;]+;base64,/, "").replace(/[\r\n\s]/g, "");
+        fullBuffer = Buffer.from(cleanB64, "base64");
+      }
+
+      if (fullBuffer && fullBuffer.length > 0) {
+        await fs.promises.writeFile(finalPath, fullBuffer);
+        const meta = {
+          id: resolvedFileId,
+          fileName: docData.fileName || resolvedFileId,
+          cleanFileName: docData.cleanFileName || resolvedFileId,
+          fileType: docData.fileType || "video/mp4",
+          size: fullBuffer.length,
+          createdAt: docData.createdAt || new Date().toISOString()
+        };
+        await fs.promises.writeFile(`${finalPath}.meta.json`, JSON.stringify(meta, null, 2));
+        console.log(`Successfully reassembled and restored media ${resolvedFileId} from Firestore (${fullBuffer.length} bytes)`);
+        return finalPath;
+      }
+    } catch (err) {
+      console.error(`Error restoring media ${cleanId} from Firestore:`, err);
+    }
+
+    return null;
+  }
+
+  // Upload Media Endpoint
+  app.post("/api/upload-media", async (req, res) => {
+    try {
+      const contentType = req.headers["content-type"] || "";
+      let rawFileName = (req.headers["x-file-name"] as string) || "file";
+      let rawFileType = (req.headers["x-file-type"] as string) || "";
+      let buffer: Buffer | null = null;
+
+      if (contentType.includes("application/json")) {
+        const { fileName, fileType, dataUrl, base64 } = req.body || {};
+        if (fileName) rawFileName = fileName;
+        if (fileType) rawFileType = fileType;
+
+        if (dataUrl && typeof dataUrl === "string") {
+          const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            if (!rawFileType) rawFileType = match[1];
+            buffer = Buffer.from(match[2], "base64");
+          } else {
+            const b64 = dataUrl.replace(/^data:[^;]+;base64,/, "");
+            buffer = Buffer.from(b64, "base64");
+          }
+        } else if (base64 && typeof base64 === "string") {
+          buffer = Buffer.from(base64, "base64");
+        }
+      } else {
+        // Binary stream directly piped
+        const chunks: Buffer[] = [];
+        await new Promise<void>((resolve, reject) => {
+          req.on("data", (c) => chunks.push(c));
+          req.on("end", resolve);
+          req.on("error", reject);
+        });
+        if (chunks.length > 0) {
+          buffer = Buffer.concat(chunks);
+        }
+      }
+
+      if (!buffer || buffer.length === 0) {
+        return res.status(400).json({ error: "No media data provided or file was empty" });
+      }
+
+      const cleanFileName = rawFileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const timestamp = Date.now();
+      const rand = crypto.randomBytes(4).toString("hex");
+      const fileId = `file_${timestamp}_${rand}_${cleanFileName}`;
+      const filePath = path.join(UPLOAD_DIR, fileId);
+
+      // Infer MIME type if missing
+      const ext = path.extname(cleanFileName).toLowerCase();
+      let mimeType = rawFileType;
+      if (!mimeType || mimeType === "application/octet-stream") {
+        if (ext === ".mp4") mimeType = "video/mp4";
+        else if (ext === ".pdf") mimeType = "application/pdf";
+        else if (ext === ".png") mimeType = "image/png";
+        else if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
+        else if (ext === ".mov") mimeType = "video/quicktime";
+        else if (ext === ".webm") mimeType = "video/webm";
+        else mimeType = "video/mp4";
+      }
+
+      await fs.promises.writeFile(filePath, buffer);
+
+      const meta = {
+        id: fileId,
+        fileName: rawFileName,
+        cleanFileName,
+        fileType: mimeType,
+        size: buffer.length,
+        createdAt: new Date().toISOString()
+      };
+
+      await fs.promises.writeFile(`${filePath}.meta.json`, JSON.stringify(meta, null, 2));
+
+      // Synchronously sync chunks to Firestore so ALL instances and ALL users have this file
+      if (firestoreDb && buffer && buffer.length > 0) {
+        try {
+          const CHUNK_SIZE = 600 * 1024; // 600 KB
+          const chunks: Buffer[] = [];
+          for (let i = 0; i < buffer.length; i += CHUNK_SIZE) {
+            chunks.push(buffer.subarray(i, Math.min(i + CHUNK_SIZE, buffer.length)));
+          }
+
+          await setDoc(doc(firestoreDb, "lesson_files", fileId), {
+            id: fileId,
+            fileName: rawFileName,
+            cleanFileName,
+            fileType: mimeType,
+            size: buffer.length,
+            totalChunks: chunks.length,
+            createdAt: new Date().toISOString()
+          });
+
+          const BATCH_SIZE = 8;
+          for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+            const batch = chunks.slice(i, i + BATCH_SIZE);
+            await Promise.all(
+              batch.map((chunkBuf, idx) => {
+                const chunkIndex = i + idx;
+                return setDoc(doc(firestoreDb, "lesson_files", fileId, "chunks", `${chunkIndex}`), {
+                  chunkIndex,
+                  data: chunkBuf.toString("base64"),
+                  size: chunkBuf.length
+                });
+              })
+            );
+          }
+          console.log(`Synced media ${fileId} to Firestore (${chunks.length} chunks) for universal team access`);
+        } catch (fErr) {
+          console.error("Failed to sync media to Firestore:", fErr);
+        }
+      }
+
+      return res.json({
+        success: true,
+        fileId,
+        url: `/api/media/${fileId}`,
+        downloadUrl: `/api/media-download/${fileId}`,
+        firestoreKey: `firestorefile_${fileId}`,
+        fileName: rawFileName,
+        fileType: mimeType,
+        size: buffer.length
+      });
+    } catch (err: any) {
+      console.error("Upload media failed:", err);
+      return res.status(500).json({ error: err.message || "Failed to save media file" });
+    }
+  });
+
+  // Media Serving Endpoint with full Byte-Range HTTP streaming support
+  app.get("/api/media/:fileId", async (req, res) => {
+    try {
+      const requestedId = req.params.fileId;
+      if (!requestedId) return res.status(400).send("Missing file ID");
+
+      const targetPath = await ensureMediaFileOnDisk(requestedId);
+      if (!targetPath || !fs.existsSync(targetPath)) {
+        return res.status(404).send("Media file not found");
+      }
+
+      const stat = await fs.promises.stat(targetPath);
+      const ext = path.extname(targetPath).toLowerCase();
+
+      // Read meta if available
+      let mimeType = "video/mp4";
+      let displayName = path.basename(targetPath);
+      const metaPath = `${targetPath}.meta.json`;
+      if (fs.existsSync(metaPath)) {
+        try {
+          const meta = JSON.parse(await fs.promises.readFile(metaPath, "utf8"));
+          if (meta.fileType) mimeType = meta.fileType;
+          if (meta.fileName) displayName = meta.fileName;
+        } catch {}
+      } else {
+        if (ext === ".pdf") mimeType = "application/pdf";
+        else if (ext === ".png") mimeType = "image/png";
+        else if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
+        else if (ext === ".webm") mimeType = "video/webm";
+        else if (ext === ".mov") mimeType = "video/quicktime";
+        else if (ext === ".mp4") mimeType = "video/mp4";
+      }
+
+      const isDownload = req.query.download === "1" || req.query.download === "true";
+      const disposition = isDownload ? "attachment" : "inline";
+
+      // Support HTTP Range requests for video seeking and smooth playback
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+
+        if (start >= stat.size) {
+          res.status(416).setHeader("Content-Range", `bytes */${stat.size}`);
+          return res.end();
+        }
+
+        const chunksize = end - start + 1;
+        const fileStream = fs.createReadStream(targetPath, { start, end });
+
+        res.writeHead(206, {
+          "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+          "Accept-Ranges": "bytes",
+          "Content-Length": chunksize,
+          "Content-Type": mimeType,
+          "Content-Disposition": `${disposition}; filename="${encodeURIComponent(displayName)}"`
+        });
+        fileStream.pipe(res);
+      } else {
+        res.writeHead(200, {
+          "Content-Length": stat.size,
+          "Content-Type": mimeType,
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": `${disposition}; filename="${encodeURIComponent(displayName)}"`
+        });
+        fs.createReadStream(targetPath).pipe(res);
+      }
+    } catch (err: any) {
+      console.error("Error serving media:", err);
+      res.status(500).send("Error reading media file");
+    }
+  });
+
+  // Dedicated media download endpoint that forces attachment download
+  app.get("/api/media-download/:fileId", async (req, res) => {
+    try {
+      const requestedId = req.params.fileId;
+      if (!requestedId) return res.status(400).send("Missing file ID");
+
+      const targetPath = await ensureMediaFileOnDisk(requestedId);
+      if (!targetPath || !fs.existsSync(targetPath)) {
+        return res.status(404).send("Media file not found");
+      }
+
+      const stat = await fs.promises.stat(targetPath);
+      let displayName = path.basename(targetPath);
+      let mimeType = "application/octet-stream";
+      const metaPath = `${targetPath}.meta.json`;
+      if (fs.existsSync(metaPath)) {
+        try {
+          const meta = JSON.parse(await fs.promises.readFile(metaPath, "utf8"));
+          if (meta.fileName) displayName = meta.fileName;
+          if (meta.fileType) mimeType = meta.fileType;
+        } catch {}
+      }
+
+      res.writeHead(200, {
+        "Content-Length": stat.size,
+        "Content-Type": mimeType,
+        "Content-Disposition": `attachment; filename="${encodeURIComponent(displayName)}"`
+      });
+      fs.createReadStream(targetPath).pipe(res);
+    } catch (err: any) {
+      console.error("Error downloading media:", err);
+      res.status(500).send("Error downloading media file");
+    }
+  });
+
+  // Media listing endpoint
+  app.get("/api/media-list", async (_req, res) => {
+    try {
+      const files = await fs.promises.readdir(UPLOAD_DIR);
+      const mediaFiles = files.filter(f => !f.endsWith(".meta.json"));
+      const result = await Promise.all(
+        mediaFiles.map(async (fileId) => {
+          const filePath = path.join(UPLOAD_DIR, fileId);
+          const stat = await fs.promises.stat(filePath);
+          let meta: any = {};
+          if (fs.existsSync(`${filePath}.meta.json`)) {
+            try {
+              meta = JSON.parse(await fs.promises.readFile(`${filePath}.meta.json`, "utf8"));
+            } catch {}
+          }
+          return {
+            fileId,
+            url: `/api/media/${fileId}`,
+            fileName: meta.fileName || fileId,
+            fileType: meta.fileType || "video/mp4",
+            size: stat.size,
+            createdAt: meta.createdAt || stat.birthtime.toISOString()
+          };
+        })
+      );
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 

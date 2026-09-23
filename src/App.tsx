@@ -7404,7 +7404,12 @@ function AppContent() {
             const isDirectVideo = (url: string) => {
               if (!url) return false;
               const cleanUrl = url.toLowerCase().split('?')[0];
-              return cleanUrl.endsWith('.mp4') || cleanUrl.endsWith('.webm') || cleanUrl.endsWith('.ogg') || cleanUrl.endsWith('.mov') || cleanUrl.startsWith('data:video/');
+              return (
+                cleanUrl.endsWith('.mp4') || cleanUrl.endsWith('.webm') || cleanUrl.endsWith('.ogg') || cleanUrl.endsWith('.mov') || cleanUrl.endsWith('.mkv') || cleanUrl.endsWith('.avi') ||
+                cleanUrl.includes('.mp4') || cleanUrl.includes('.mov') ||
+                cleanUrl.startsWith('data:video/') ||
+                cleanUrl.startsWith('firestorefile_') || cleanUrl.startsWith('localfile_') || cleanUrl.startsWith('/api/media')
+              );
             };
 
             const getMediaType = (url: string | undefined | null, mimeType?: string | null): 'video' | 'pdf' | 'image' | 'doc' | 'embed' => {
@@ -8031,19 +8036,19 @@ function AppContent() {
 
                                         <div className="pt-2 flex flex-col sm:flex-row items-center gap-2.5 w-full justify-center">
                                           <a
-                                            href={resolvedLocalUrl}
+                                            href={resolvedLocalUrl || `/api/media-download/${encodeURIComponent(activePlayingUrl.replace(/^(firestorefile_|localfile_)/, '').replace(/^\/?api\/media\//, '').replace(/^\/?api\/media-download\//, ''))}`}
                                             download={downloadFileName}
                                             className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl shadow-lg hover:shadow-red-900/40 transition-all cursor-pointer"
                                           >
                                             <Download className="w-4 h-4" /> Download Video File
                                           </a>
                                           <a
-                                            href={resolvedLocalUrl}
+                                            href={resolvedLocalUrl || `/api/media-download/${encodeURIComponent(activePlayingUrl.replace(/^(firestorefile_|localfile_)/, '').replace(/^\/?api\/media\//, '').replace(/^\/?api\/media-download\//, ''))}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-semibold text-xs rounded-xl border border-slate-700 transition-all"
                                           >
-                                            <ExternalLink className="w-3.5 h-3.5" /> Open in New Tab
+                                            <ExternalLink className="w-3.5 h-3.5" /> Open / Save
                                           </a>
                                         </div>
                                       </div>
@@ -8051,20 +8056,51 @@ function AppContent() {
                                   );
                                 })()
                               ) : (
-                                <div className="absolute inset-0 p-8 flex flex-col items-center justify-center text-center bg-slate-900 border-b border-slate-800 space-y-3">
-                                  <div className="w-12 h-12 rounded-full bg-red-950/50 text-red-400 border border-red-900/30 flex items-center justify-center shadow-xs">
-                                    <FileVideo className="w-6 h-6" />
-                                  </div>
-                                  <div className="space-y-1">
-                                    <h5 className="text-sm font-bold text-slate-100 font-sans">Lesson File Unavailable</h5>
-                                    <p className="text-xs text-slate-400 max-w-md font-sans leading-relaxed">
-                                      This video file (<code>{activePlayingUrl.replace(/^(firestorefile_|localfile_)/, '')}</code>) could not be loaded from storage.
-                                    </p>
-                                    <p className="text-[10px] text-slate-400 max-w-sm font-sans leading-relaxed pt-1 mx-auto">
-                                      If this file was uploaded locally, it is syncing to cloud storage or you can re-upload it in Edit Lesson.
-                                    </p>
-                                  </div>
-                                </div>
+                                (() => {
+                                  const videoTitle = currentMediaToPlay?.title || activeLesson.title;
+                                  const downloadFileName = `${videoTitle.replace(/[/\\?%*:|"<>]/g, '_')}.mp4`;
+                                  const cleanMediaId = activePlayingUrl.replace(/^(firestorefile_|localfile_)/, '').replace(/^\/?api\/media\//, '').replace(/^\/?api\/media-download\//, '');
+                                  const serverDownloadUrl = `/api/media-download/${encodeURIComponent(cleanMediaId)}`;
+
+                                  return (
+                                    <div className="w-full h-full p-8 flex flex-col items-center justify-center text-center bg-radial from-slate-900 via-slate-950 to-black relative select-none">
+                                      <div className="max-w-md w-full p-7 bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl flex flex-col items-center space-y-4">
+                                        <div className="w-16 h-16 rounded-2xl bg-red-950/70 border border-red-800/50 text-red-400 flex items-center justify-center shadow-lg">
+                                          <FileVideo className="w-8 h-8 text-red-400" />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-950 text-red-300 text-[10px] font-bold uppercase tracking-wider font-mono border border-red-800">
+                                            <Download className="w-3 h-3" /> Video Download
+                                          </span>
+                                          <h4 className="text-base font-bold text-white pt-1">
+                                            {videoTitle}
+                                          </h4>
+                                          <p className="text-xs text-slate-400 max-w-sm font-sans leading-relaxed">
+                                            This video is available for download to play directly on your device in your preferred media player (e.g. QuickTime, VLC, Windows Media Player) with full video and audio.
+                                          </p>
+                                        </div>
+
+                                        <div className="pt-2 flex flex-col sm:flex-row items-center gap-2.5 w-full justify-center">
+                                          <a
+                                            href={serverDownloadUrl}
+                                            download={downloadFileName}
+                                            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl shadow-lg hover:shadow-red-900/40 transition-all cursor-pointer"
+                                          >
+                                            <Download className="w-4 h-4" /> Download Video File
+                                          </a>
+                                          <a
+                                            href={serverDownloadUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-semibold text-xs rounded-xl border border-slate-700 transition-all"
+                                          >
+                                            <ExternalLink className="w-3.5 h-3.5" /> Open / Save
+                                          </a>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })()
                               )
                             ) : (() => {
                               const mediaType = getMediaType(activePlayingUrl);
